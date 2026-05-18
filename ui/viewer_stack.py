@@ -4,6 +4,7 @@ from PyQt6.QtCore import Qt
 from models.viewer_mode import ViewerMode
 from ui.file_panel import FilePanelWidget
 from ui.image_viewer import ImageViewerWidget
+from ui.cad_viewer import Cad2DViewerWidget
 
 _MODE_INDEX: dict[ViewerMode, int] = {
     ViewerMode.IMAGE: 1,
@@ -27,11 +28,12 @@ class ViewerStack(QStackedWidget):
         super().__init__(parent)
         self._file_panel = FilePanelWidget()
         self._image_viewer = ImageViewerWidget()
+        self._cad_viewer = Cad2DViewerWidget()
 
-        self.addWidget(self._file_panel)                                        # 0
-        self.addWidget(self._image_viewer)                                      # 1
-        self.addWidget(_Placeholder("2D CAD Viewer\n(4단계 구현 예정)"))       # 2
-        self.addWidget(_Placeholder("3D Model Viewer\n(5단계 구현 예정)"))     # 3
+        self.addWidget(self._file_panel)                                       # 0
+        self.addWidget(self._image_viewer)                                     # 1
+        self.addWidget(self._cad_viewer)                                       # 2
+        self.addWidget(_Placeholder("3D Model Viewer\n(5단계 구현 예정)"))    # 3
 
     @property
     def file_panel(self) -> FilePanelWidget:
@@ -40,6 +42,10 @@ class ViewerStack(QStackedWidget):
     @property
     def image_viewer(self) -> ImageViewerWidget:
         return self._image_viewer
+
+    @property
+    def cad_viewer(self) -> Cad2DViewerWidget:
+        return self._cad_viewer
 
     def show_browser(self) -> None:
         self.setCurrentIndex(0)

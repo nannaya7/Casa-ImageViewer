@@ -27,14 +27,14 @@ class FileBrowserPanel(QWidget):
         layout.addWidget(header)
 
         self._fs_model = QFileSystemModel()
-        self._fs_model.setRootPath(QDir.rootPath())
+        self._fs_model.setRootPath("")
         self._fs_model.setFilter(
             QDir.Filter.Dirs | QDir.Filter.NoDotAndDotDot | QDir.Filter.Drives
         )
 
         self._tree = QTreeView()
         self._tree.setModel(self._fs_model)
-        self._tree.setRootIndex(self._fs_model.index(QDir.rootPath()))
+        self._tree.setRootIndex(self._fs_model.index(""))
         self._tree.hideColumn(1)
         self._tree.hideColumn(2)
         self._tree.hideColumn(3)

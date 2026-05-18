@@ -45,6 +45,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Image & CAD Integrated Viewer")
         self.resize(1280, 800)
         self._current_file: str | None = None
+        self._current_mode: ViewerMode = ViewerMode.NONE
         self._setup_ui()
         self._setup_menubar()
         self._setup_statusbar()
@@ -118,51 +119,60 @@ class MainWindow(QMainWindow):
             self._browse_acts.append(act)
         self._view_actions[ViewStyle.LARGE_ICONS].setChecked(True)
 
-        # ── 이미지 편집 ────────────────────────────────────────────────
-        self._image_acts: list[QAction] = []
+        # ── 이미지 전용: 편집 ──────────────────────────────────────────
+        self._image_only_acts: list[QAction] = []
 
         sep_edit = tb.addSeparator()
-        self._image_acts.append(sep_edit)
+        self._image_only_acts.append(sep_edit)
 
         self._act_undo = QAction("실행 취소", self)
         self._act_undo.setShortcut("Ctrl+Z")
         self._act_undo.setEnabled(False)
         self._act_undo.triggered.connect(lambda: self._viewer_stack.image_viewer.undo())
         tb.addAction(self._act_undo)
-        self._image_acts.append(self._act_undo)
+        self._image_only_acts.append(self._act_undo)
 
         sep_edit2 = tb.addSeparator()
-        self._image_acts.append(sep_edit2)
+        self._image_only_acts.append(sep_edit2)
 
         self._act_crop = QAction("자르기", self)
         self._act_crop.setCheckable(True)
         self._act_crop.triggered.connect(self._on_crop_toggle)
         tb.addAction(self._act_crop)
-        self._image_acts.append(self._act_crop)
+        self._image_only_acts.append(self._act_crop)
 
         act_resize = QAction("크기 조정", self)
         act_resize.triggered.connect(lambda: self._viewer_stack.image_viewer.open_resize_dialog())
         tb.addAction(act_resize)
-        self._image_acts.append(act_resize)
+        self._image_only_acts.append(act_resize)
 
-        # ── 이미지 뷰어: 보기 조작 ─────────────────────────────────
-        sep_img = tb.addSeparator()
-        self._image_acts.append(sep_img)
+        # ── 공용 뷰어: 확대/축소/맞춤 (이미지 + CAD 모드 공유) ─────────
+        self._viewer_acts: list[QAction] = []
 
-        for label, shortcut, slot in (
-            ("확대",            "Ctrl++", lambda: self._viewer_stack.image_viewer.zoom_in()),
-            ("축소",            "Ctrl+-", lambda: self._viewer_stack.image_viewer.zoom_out()),
-            ("화면 맞춤",       "Ctrl+0", lambda: self._viewer_stack.image_viewer.fit()),
-        ):
-            act = QAction(label, self)
-            if shortcut:
-                act.setShortcut(shortcut)
-            act.triggered.connect(slot)
-            tb.addAction(act)
-            self._image_acts.append(act)
+        sep_zoom = tb.addSeparator()
+        self._viewer_acts.append(sep_zoom)
 
+        act_zoom_in = QAction("확대", self)
+        act_zoom_in.setShortcut("Ctrl++")
+        act_zoom_in.triggered.connect(self._zoom_in)
+        tb.addAction(act_zoom_in)
+        self._viewer_acts.append(act_zoom_in)
+
+        act_zoom_out = QAction("축소", self)
+        act_zoom_out.setShortcut("Ctrl+-")
+        act_zoom_out.triggered.connect(self._zoom_out)
+        tb.addAction(act_zoom_out)
+        self._viewer_acts.append(act_zoom_out)
+
+        act_fit = QAction("화면 맞춤", self)
+        act_fit.setShortcut("Ctrl+0")
+        act_fit.triggered.connect(self._fit)
+        tb.addAction(act_fit)
+        self._viewer_acts.append(act_fit)
+
+        # ── 이미지 전용: 회전 + 저장 ──────────────────────────────────
         sep_rot = tb.addSeparator()
-        self._image_acts.append(sep_rot)
+        self._image_only_acts.append(sep_rot)
 
         for label, slot in (
             ("↻ 시계방향",  lambda: self._viewer_stack.image_viewer.rotate_cw()),
@@ -171,16 +181,16 @@ class MainWindow(QMainWindow):
             act = QAction(label, self)
             act.triggered.connect(slot)
             tb.addAction(act)
-            self._image_acts.append(act)
+            self._image_only_acts.append(act)
 
         sep_save = tb.addSeparator()
-        self._image_acts.append(sep_save)
+        self._image_only_acts.append(sep_save)
 
         act_save = QAction("다른 이름으로 저장", self)
         act_save.setShortcut("Ctrl+Shift+S")
         act_save.triggered.connect(lambda: self._viewer_stack.image_viewer.save_as())
         tb.addAction(act_save)
-        self._image_acts.append(act_save)
+        self._image_only_acts.append(act_save)
 
         self._set_browse_mode()
         return tb
@@ -235,6 +245,9 @@ class MainWindow(QMainWindow):
         if mode == ViewerMode.IMAGE:
             self._viewer_stack.image_viewer.load_file(file_path)
             self._set_image_mode()
+        elif mode == ViewerMode.CAD_2D:
+            self._viewer_stack.cad_viewer.load_file(file_path)
+            self._set_cad_mode()
         else:
             self._set_back_only_mode()
 
@@ -265,6 +278,7 @@ class MainWindow(QMainWindow):
         iv = self._viewer_stack.image_viewer
         if iv.is_crop_mode:
             iv.exit_crop_mode()
+        self._current_mode = ViewerMode.NONE
         self._viewer_stack.show_browser()
         self._set_browse_mode()
         folder = self._viewer_stack.file_panel._current_folder
@@ -274,32 +288,74 @@ class MainWindow(QMainWindow):
         self._status_mode.setText("")
 
     # ------------------------------------------------------------------
+    # Generic viewer dispatch (zoom/fit shared between image and CAD)
+    # ------------------------------------------------------------------
+
+    def _zoom_in(self) -> None:
+        if self._current_mode == ViewerMode.IMAGE:
+            self._viewer_stack.image_viewer.zoom_in()
+        elif self._current_mode == ViewerMode.CAD_2D:
+            self._viewer_stack.cad_viewer.zoom_in()
+
+    def _zoom_out(self) -> None:
+        if self._current_mode == ViewerMode.IMAGE:
+            self._viewer_stack.image_viewer.zoom_out()
+        elif self._current_mode == ViewerMode.CAD_2D:
+            self._viewer_stack.cad_viewer.zoom_out()
+
+    def _fit(self) -> None:
+        if self._current_mode == ViewerMode.IMAGE:
+            self._viewer_stack.image_viewer.fit()
+        elif self._current_mode == ViewerMode.CAD_2D:
+            self._viewer_stack.cad_viewer.fit()
+
+    # ------------------------------------------------------------------
     # Toolbar mode switch
     # ------------------------------------------------------------------
 
     def _set_browse_mode(self) -> None:
+        self._current_mode = ViewerMode.NONE
         self._act_back.setVisible(False)
         self._sep_back.setVisible(False)
         for act in self._browse_acts:
             act.setVisible(True)
-        for act in self._image_acts:
+        for act in self._image_only_acts:
+            act.setVisible(False)
+        for act in self._viewer_acts:
             act.setVisible(False)
 
     def _set_image_mode(self) -> None:
+        self._current_mode = ViewerMode.IMAGE
         self._act_back.setVisible(True)
         self._sep_back.setVisible(True)
         for act in self._browse_acts:
             act.setVisible(False)
-        for act in self._image_acts:
+        for act in self._image_only_acts:
+            act.setVisible(True)
+        for act in self._viewer_acts:
             act.setVisible(True)
         self._act_crop.setChecked(False)
 
-    def _set_back_only_mode(self) -> None:
+    def _set_cad_mode(self) -> None:
+        self._current_mode = ViewerMode.CAD_2D
         self._act_back.setVisible(True)
         self._sep_back.setVisible(True)
         for act in self._browse_acts:
             act.setVisible(False)
-        for act in self._image_acts:
+        for act in self._image_only_acts:
+            act.setVisible(False)
+        for act in self._viewer_acts:
+            act.setVisible(True)
+
+    def _set_back_only_mode(self) -> None:
+        self._current_mode = ViewerMode.NONE
+        self._act_back.setVisible(True)
+        self._sep_back.setVisible(True)
+        for act in self._browse_acts:
+            act.setVisible(False)
+        for act in self._image_only_acts:
+            act.setVisible(False)
+        for act in self._viewer_acts:
             act.setVisible(False)
 
 

@@ -24,6 +24,28 @@
 
 ---
 
+## Release 0.4 — 2026-05-18
+
+### 4단계: DXF 뷰어
+
+- `loaders/dxf_loader.py` — ezdxf 기반 DXF 파서
+  - 지원 엔티티: LINE / CIRCLE / ARC / LWPOLYLINE (bulge 아크 포함) / POLYLINE / SPLINE / ELLIPSE / INSERT (블록 참조 재귀 전개)
+  - DXF Y-up → Qt Y-down 좌표 변환 (Y 축 반전)
+  - 모든 엔티티를 단일 QPainterPath로 수집
+- `ui/cad_viewer.py` — QGraphicsView 기반 2D CAD 뷰어
+  - 마우스 휠 줌, ScrollHandDrag 팬
+  - 화면 맞춤(fit), Cosmetic Pen(0px, 항상 1px 선폭)
+  - 검은 배경, 연회색(200,200,200) 엔티티
+  - DXF 파싱 오류 시 경고 다이얼로그 표시
+- `ui/viewer_stack.py` — CAD_2D 슬롯에 Cad2DViewerWidget 연결
+- `ui/main_window.py` — 툴바 구조 리팩토링 및 CAD 모드 추가
+  - `_image_only_acts` (이미지 전용): 실행 취소, 자르기, 크기 조정, 회전, 저장
+  - `_viewer_acts` (이미지 + CAD 공용): 확대(Ctrl++) / 축소(Ctrl+-) / 화면 맞춤(Ctrl+0)
+  - `_current_mode` 필드로 확대/축소/맞춤 동작을 현재 뷰어에 위임
+  - `_set_cad_mode()` 추가: 뒤로 + 공용 줌 버튼만 표시
+
+---
+
 ## Release 0.3 — 2026-05-18
 
 ### 3단계: 이미지 편집
