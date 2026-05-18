@@ -37,6 +37,7 @@ def _format_size(n: int) -> str:
 
 class FilePanelWidget(QWidget):
     file_opened = pyqtSignal(str)
+    folder_navigated = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -134,11 +135,18 @@ class FilePanelWidget(QWidget):
         if not self._current_folder:
             return []
         try:
-            return sorted(
-                (e for e in Path(self._current_folder).iterdir()
-                 if e.is_file() and is_supported(e.name)),
+            folder = Path(self._current_folder)
+            parent = folder.parent
+            up = [parent] if parent != folder else []
+            dirs = sorted(
+                (e for e in folder.iterdir() if e.is_dir()),
                 key=lambda p: p.name.lower(),
             )
+            files = sorted(
+                (e for e in folder.iterdir() if e.is_file() and is_supported(e.name)),
+                key=lambda p: p.name.lower(),
+            )
+            return up + dirs + files
         except PermissionError:
             return []
 
@@ -147,27 +155,37 @@ class FilePanelWidget(QWidget):
 
     def _populate_icon_list(self, widget: QListWidget, entries: list[Path]) -> None:
         widget.clear()
+        parent = Path(self._current_folder).parent if self._current_folder else None
         for entry in entries:
-            item = QListWidgetItem(self._get_icon(entry), entry.name)
+            label = ".." if (parent and entry == parent) else entry.name
+            item = QListWidgetItem(self._get_icon(entry), label)
             item.setData(Qt.ItemDataRole.UserRole, str(entry))
             widget.addItem(item)
 
     def _populate_details(self, entries: list[Path]) -> None:
         self._detail_tree.clear()
+        parent = Path(self._current_folder).parent if self._current_folder else None
         for entry in entries:
-            stat = entry.stat()
-            modified = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
-            row = QTreeWidgetItem([
-                entry.name,
-                _format_size(stat.st_size),
-                entry.suffix.lower(),
-                modified,
-            ])
+            try:
+                stat = entry.stat()
+                modified = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
+            except OSError:
+                modified = ""
+            display_name = ".." if (parent and entry == parent) else entry.name
+            if entry.is_dir():
+                row = QTreeWidgetItem([display_name, "", "폴더", modified])
+            else:
+                row = QTreeWidgetItem([
+                    display_name,
+                    _format_size(stat.st_size),
+                    entry.suffix.lower(),
+                    modified,
+                ])
+                row.setTextAlignment(
+                    1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                )
             row.setIcon(0, self._get_icon(entry))
             row.setData(0, Qt.ItemDataRole.UserRole, str(entry))
-            row.setTextAlignment(
-                1, Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
-            )
             self._detail_tree.addTopLevelItem(row)
 
         self._detail_tree.setColumnWidth(0, 240)
@@ -182,9 +200,16 @@ class FilePanelWidget(QWidget):
     def _on_item_double_clicked(self, item: QListWidgetItem) -> None:
         path = item.data(Qt.ItemDataRole.UserRole)
         if path:
-            self.file_opened.emit(path)
+            self._open_path(path)
 
     def _on_detail_double_clicked(self, item: QTreeWidgetItem) -> None:
         path = item.data(0, Qt.ItemDataRole.UserRole)
         if path:
+            self._open_path(path)
+
+    def _open_path(self, path: str) -> None:
+        if Path(path).is_dir():
+            self.load_folder(path)
+            self.folder_navigated.emit(path)
+        else:
             self.file_opened.emit(path)

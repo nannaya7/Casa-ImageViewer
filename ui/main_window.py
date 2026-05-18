@@ -78,6 +78,7 @@ class MainWindow(QMainWindow):
 
         self._viewer_stack = ViewerStack()
         self._viewer_stack.file_panel.file_opened.connect(self._on_file_opened)
+        self._viewer_stack.file_panel.folder_navigated.connect(self._on_folder_selected)
         iv = self._viewer_stack.image_viewer
         iv.crop_mode_exited.connect(self._on_crop_mode_exited)
         iv.undo_available.connect(self._act_undo.setEnabled)
@@ -233,7 +234,7 @@ class MainWindow(QMainWindow):
         self._viewer_stack.show_browser()
         self._set_browse_mode()
         count = self._viewer_stack.file_panel.file_count()
-        self._status_info.setText(f"  {folder_path}    ({count}개 파일)")
+        self._status_info.setText(f"  {folder_path}    ({count}개 항목)")
         self._status_zoom.setText("")
         self._status_mode.setText("")
 
@@ -248,6 +249,9 @@ class MainWindow(QMainWindow):
         elif mode == ViewerMode.CAD_2D:
             self._viewer_stack.cad_viewer.load_file(file_path)
             self._set_cad_mode()
+        elif mode == ViewerMode.MODEL_3D:
+            self._viewer_stack.model3d_viewer.load_file(file_path)
+            self._set_3d_mode()
         else:
             self._set_back_only_mode()
 
@@ -283,7 +287,7 @@ class MainWindow(QMainWindow):
         self._set_browse_mode()
         folder = self._viewer_stack.file_panel._current_folder
         count = self._viewer_stack.file_panel.file_count()
-        self._status_info.setText(f"  {folder}    ({count}개 파일)")
+        self._status_info.setText(f"  {folder}    ({count}개 항목)")
         self._status_zoom.setText("")
         self._status_mode.setText("")
 
@@ -296,18 +300,24 @@ class MainWindow(QMainWindow):
             self._viewer_stack.image_viewer.zoom_in()
         elif self._current_mode == ViewerMode.CAD_2D:
             self._viewer_stack.cad_viewer.zoom_in()
+        elif self._current_mode == ViewerMode.MODEL_3D:
+            self._viewer_stack.model3d_viewer.zoom_in()
 
     def _zoom_out(self) -> None:
         if self._current_mode == ViewerMode.IMAGE:
             self._viewer_stack.image_viewer.zoom_out()
         elif self._current_mode == ViewerMode.CAD_2D:
             self._viewer_stack.cad_viewer.zoom_out()
+        elif self._current_mode == ViewerMode.MODEL_3D:
+            self._viewer_stack.model3d_viewer.zoom_out()
 
     def _fit(self) -> None:
         if self._current_mode == ViewerMode.IMAGE:
             self._viewer_stack.image_viewer.fit()
         elif self._current_mode == ViewerMode.CAD_2D:
             self._viewer_stack.cad_viewer.fit()
+        elif self._current_mode == ViewerMode.MODEL_3D:
+            self._viewer_stack.model3d_viewer.fit()
 
     # ------------------------------------------------------------------
     # Toolbar mode switch
@@ -338,6 +348,17 @@ class MainWindow(QMainWindow):
 
     def _set_cad_mode(self) -> None:
         self._current_mode = ViewerMode.CAD_2D
+        self._act_back.setVisible(True)
+        self._sep_back.setVisible(True)
+        for act in self._browse_acts:
+            act.setVisible(False)
+        for act in self._image_only_acts:
+            act.setVisible(False)
+        for act in self._viewer_acts:
+            act.setVisible(True)
+
+    def _set_3d_mode(self) -> None:
+        self._current_mode = ViewerMode.MODEL_3D
         self._act_back.setVisible(True)
         self._sep_back.setVisible(True)
         for act in self._browse_acts:

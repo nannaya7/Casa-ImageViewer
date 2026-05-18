@@ -1,10 +1,10 @@
-from PyQt6.QtWidgets import QStackedWidget, QWidget, QLabel, QVBoxLayout
-from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QStackedWidget
 
 from models.viewer_mode import ViewerMode
 from ui.file_panel import FilePanelWidget
 from ui.image_viewer import ImageViewerWidget
 from ui.cad_viewer import Cad2DViewerWidget
+from ui.model3d_viewer import Model3DViewerWidget
 
 _MODE_INDEX: dict[ViewerMode, int] = {
     ViewerMode.IMAGE: 1,
@@ -13,27 +13,18 @@ _MODE_INDEX: dict[ViewerMode, int] = {
 }
 
 
-class _Placeholder(QWidget):
-    def __init__(self, text: str, parent=None):
-        super().__init__(parent)
-        label = QLabel(text)
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setStyleSheet("font-size: 16px; color: #888888;")
-        layout = QVBoxLayout(self)
-        layout.addWidget(label)
-
-
 class ViewerStack(QStackedWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._file_panel = FilePanelWidget()
-        self._image_viewer = ImageViewerWidget()
-        self._cad_viewer = Cad2DViewerWidget()
+        self._file_panel     = FilePanelWidget()
+        self._image_viewer   = ImageViewerWidget()
+        self._cad_viewer     = Cad2DViewerWidget()
+        self._model3d_viewer = Model3DViewerWidget()
 
-        self.addWidget(self._file_panel)                                       # 0
-        self.addWidget(self._image_viewer)                                     # 1
-        self.addWidget(self._cad_viewer)                                       # 2
-        self.addWidget(_Placeholder("3D Model Viewer\n(5단계 구현 예정)"))    # 3
+        self.addWidget(self._file_panel)       # 0
+        self.addWidget(self._image_viewer)     # 1
+        self.addWidget(self._cad_viewer)       # 2
+        self.addWidget(self._model3d_viewer)   # 3
 
     @property
     def file_panel(self) -> FilePanelWidget:
@@ -46,6 +37,10 @@ class ViewerStack(QStackedWidget):
     @property
     def cad_viewer(self) -> Cad2DViewerWidget:
         return self._cad_viewer
+
+    @property
+    def model3d_viewer(self) -> Model3DViewerWidget:
+        return self._model3d_viewer
 
     def show_browser(self) -> None:
         self.setCurrentIndex(0)

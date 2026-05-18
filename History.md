@@ -1,5 +1,29 @@
 # History
 
+## Release 0.5 — 2026-05-18
+
+### 5단계: STL 3D 뷰어
+
+- `loaders/stl_loader.py` — trimesh 기반 STL 파서
+  - trimesh.load(force='mesh') 로 메시 로딩
+  - 페이스 노멀 기반 플랫 셰이딩용 flat_vertices / flat_normals 배열 사전 생성 (face × 3 확장)
+  - 바운딩 스피어 중심(center) + 반지름(radius) 추출
+- `ui/model3d_viewer.py` — QOpenGLWidget 기반 3D 뷰어
+  - CompatibilityProfile + 24bit 깊이 버퍼
+  - GL_FLAT 셰이딩, GL_LIGHT0 방향광, 소재 ambient/diffuse/specular 설정
+  - glVertexPointer / glNormalPointer + glDrawArrays(GL_TRIANGLES) 로 메시 렌더링
+  - 아크볼(Arcball) 트랙볼 회전: 스크린 좌표 → 단위 구면 투영 → QQuaternion 누적
+  - 좌클릭 드래그 = 회전, Ctrl+좌클릭 / 중간버튼 드래그 = 팬, 스크롤 = 줌
+  - 화면 맞춤(fit): 쿼터니언·팬 리셋, zoom = radius × 3
+  - 좌하단 XYZ 축 오버레이 (2D 오르토 패스, 빨강/초록/파랑)
+- `ui/viewer_stack.py` — MODEL_3D 슬롯(index 3)에 Model3DViewerWidget 연결 (Placeholder 제거)
+- `ui/main_window.py` — 3D 모드 추가
+  - `_set_3d_mode()`: 뒤로 + 공용 줌 버튼 표시 (CAD 모드와 동일 구조)
+  - `_zoom_in/_zoom_out/_fit` — MODEL_3D 디스패치 추가
+  - `_on_file_opened` — MODEL_3D 분기 추가
+
+---
+
 ## Release 0.1 — 2026-05-18
 
 ### 1단계: 프로젝트 인프라
