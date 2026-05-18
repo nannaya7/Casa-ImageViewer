@@ -51,6 +51,12 @@ class Model3DViewerWidget(QOpenGLWidget):
         self.fit()
         self.update()
 
+    def display_mesh(self, mesh: MeshData) -> None:
+        """Apply an already-loaded MeshData (called after async load)."""
+        self._mesh = mesh
+        self.fit()
+        self.update()
+
     def fit(self) -> None:
         self._rotation = QQuaternion()
         self._pan = QVector3D(0.0, 0.0, 0.0)

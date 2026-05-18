@@ -3,16 +3,21 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QSplitter,
     QToolBar, QStatusBar, QLabel, QVBoxLayout,
-    QFileDialog, QApplication,
+    QFileDialog, QApplication, QMenu, QMessageBox,
 )
-from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QAction, QActionGroup, QIcon
+from PyQt6.QtCore import Qt, QSize, QSettings
+from PyQt6.QtGui import QAction, QActionGroup, QIcon, QCloseEvent
 
 from ui.file_browser import FileBrowserPanel
 from ui.viewer_stack import ViewerStack
 from ui.file_panel import ViewStyle
 from services.file_type_detector import detect_viewer_mode
+from services.loader_thread import LoaderThread
 from models.viewer_mode import ViewerMode
+from loaders.image_loader import load_image
+from loaders.dxf_loader import load_dxf
+from loaders.stl_loader import load_stl
+
 
 _MODE_LABEL: dict[ViewerMode, str] = {
     ViewerMode.IMAGE: "이미지",
@@ -38,22 +43,40 @@ _VIEW_STYLES: list[tuple[ViewStyle, str]] = [
     (ViewStyle.DETAILS,     "자세히"),
 ]
 
+_STYLE_TO_IDX: dict[ViewStyle, int] = {
+    ViewStyle.LARGE_ICONS: 0,
+    ViewStyle.SMALL_ICONS: 1,
+    ViewStyle.LIST:        2,
+    ViewStyle.DETAILS:     3,
+}
+_IDX_TO_STYLE: dict[int, ViewStyle] = {v: k for k, v in _STYLE_TO_IDX.items()}
 
 _WINDOW_ICON = Path(__file__).parent.parent / "image" / "icon" / "Casa-ImageViewer-ICON.png"
 
 
 class MainWindow(QMainWindow):
+    _MAX_RECENT = 10
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Image & CAD Integrated Viewer")
         if _WINDOW_ICON.exists():
             self.setWindowIcon(QIcon(str(_WINDOW_ICON)))
         self.resize(1280, 800)
+
         self._current_file: str | None = None
         self._current_mode: ViewerMode = ViewerMode.NONE
+        self._pending_mode: ViewerMode = ViewerMode.NONE
+        self._loader_thread: LoaderThread | None = None
+        self._load_gen: int = 0
+        self._recent_files: list[str] = []
+
+        self._settings = QSettings()
+
         self._setup_ui()
         self._setup_menubar()
         self._setup_statusbar()
+        self._restore_settings()
 
     # ------------------------------------------------------------------
     # UI setup
@@ -152,7 +175,7 @@ class MainWindow(QMainWindow):
         tb.addAction(act_resize)
         self._image_only_acts.append(act_resize)
 
-        # ── 공용 뷰어: 확대/축소/맞춤 (이미지 + CAD 모드 공유) ─────────
+        # ── 공용 뷰어: 확대/축소/맞춤 ─────────────────────────────────
         self._viewer_acts: list[QAction] = []
 
         sep_zoom = tb.addSeparator()
@@ -213,6 +236,11 @@ class MainWindow(QMainWindow):
 
         file_menu.addSeparator()
 
+        self._recent_menu = QMenu("최근 파일(&R)", self)
+        file_menu.addMenu(self._recent_menu)
+
+        file_menu.addSeparator()
+
         quit_act = QAction("종료(&X)", self)
         quit_act.setShortcut("Ctrl+Q")
         quit_act.triggered.connect(QApplication.quit)
@@ -224,11 +252,146 @@ class MainWindow(QMainWindow):
         bar = QStatusBar()
         self.setStatusBar(bar)
         self._status_info = QLabel("폴더를 선택하세요")
+        self._status_loading = QLabel("")
         self._status_zoom = QLabel("")
         self._status_mode = QLabel("")
         bar.addWidget(self._status_info, 1)
+        bar.addPermanentWidget(self._status_loading)
         bar.addPermanentWidget(self._status_zoom)
         bar.addPermanentWidget(self._status_mode)
+
+    # ------------------------------------------------------------------
+    # Settings — persist across sessions
+    # ------------------------------------------------------------------
+
+    def _restore_settings(self) -> None:
+        geom = self._settings.value("geometry")
+        if geom is not None:
+            self.restoreGeometry(geom)
+        state = self._settings.value("windowState")
+        if state is not None:
+            self.restoreState(state)
+
+        style_idx = int(self._settings.value("viewStyle", 0))
+        style = _IDX_TO_STYLE.get(style_idx, ViewStyle.LARGE_ICONS)
+        self._viewer_stack.file_panel.set_view_style(style)
+        self._view_actions[style].setChecked(True)
+
+        recent = self._settings.value("recentFiles") or []
+        if isinstance(recent, str):
+            recent = [recent]
+        self._recent_files = [p for p in recent if Path(p).exists()][:self._MAX_RECENT]
+        self._update_recent_menu()
+
+        last_folder = self._settings.value("lastFolder", "")
+        if last_folder and Path(last_folder).is_dir():
+            self._on_folder_selected(last_folder)
+
+    def _save_settings(self) -> None:
+        self._settings.setValue("geometry", self.saveGeometry())
+        self._settings.setValue("windowState", self.saveState())
+        folder = self._viewer_stack.file_panel._current_folder
+        if folder:
+            self._settings.setValue("lastFolder", folder)
+        self._settings.setValue("recentFiles", self._recent_files)
+        style = next(
+            (s for s, a in self._view_actions.items() if a.isChecked()),
+            ViewStyle.LARGE_ICONS,
+        )
+        self._settings.setValue("viewStyle", _STYLE_TO_IDX[style])
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._cancel_loading()
+        self._save_settings()
+        super().closeEvent(event)
+
+    # ------------------------------------------------------------------
+    # Recent files
+    # ------------------------------------------------------------------
+
+    def _add_recent(self, file_path: str) -> None:
+        if file_path in self._recent_files:
+            self._recent_files.remove(file_path)
+        self._recent_files.insert(0, file_path)
+        self._recent_files = self._recent_files[:self._MAX_RECENT]
+        self._update_recent_menu()
+
+    def _update_recent_menu(self) -> None:
+        self._recent_menu.clear()
+        if not self._recent_files:
+            no_act = QAction("(없음)", self)
+            no_act.setEnabled(False)
+            self._recent_menu.addAction(no_act)
+            return
+        for path_str in self._recent_files:
+            p = Path(path_str)
+            act = QAction(p.name, self)
+            act.setToolTip(path_str)
+            act.triggered.connect(lambda checked, fp=path_str: self._on_file_opened(fp))
+            self._recent_menu.addAction(act)
+        self._recent_menu.addSeparator()
+        clear_act = QAction("목록 지우기", self)
+        clear_act.triggered.connect(self._clear_recent)
+        self._recent_menu.addAction(clear_act)
+
+    def _clear_recent(self) -> None:
+        self._recent_files.clear()
+        self._update_recent_menu()
+
+    # ------------------------------------------------------------------
+    # Async loading
+    # ------------------------------------------------------------------
+
+    def _get_loader(self, mode: ViewerMode, ext: str):
+        """Return the appropriate loader callable for the given mode/extension."""
+        if mode == ViewerMode.IMAGE:
+            return load_image
+        if mode == ViewerMode.CAD_2D:
+            return load_dxf
+        if mode == ViewerMode.MODEL_3D:
+            if ext in (".step", ".stp"):
+                from loaders.step_loader import load_step
+                return load_step
+            return load_stl
+        return None
+
+    def _set_loading(self, loading: bool) -> None:
+        self._toolbar.setEnabled(not loading)
+        self._status_loading.setText("  로딩 중...  " if loading else "")
+
+    def _cancel_loading(self) -> None:
+        """Invalidate any pending load result and try to stop the thread."""
+        self._load_gen += 1
+        if self._loader_thread is not None:
+            if self._loader_thread.isRunning():
+                self._loader_thread.quit()
+                self._loader_thread.wait(500)
+            self._loader_thread = None
+        self._set_loading(False)
+
+    def _on_load_finished(self, gen: int, result) -> None:
+        if gen != self._load_gen:
+            return  # stale result — user already navigated away
+        mode = self._pending_mode
+        if mode == ViewerMode.IMAGE:
+            self._viewer_stack.image_viewer.display_image(result, self._current_file or "")
+        elif mode == ViewerMode.CAD_2D:
+            self._viewer_stack.cad_viewer.display_dxf(result)
+        elif mode == ViewerMode.MODEL_3D:
+            self._viewer_stack.model3d_viewer.display_mesh(result)
+        self._set_loading(False)
+        if self._current_file:
+            path = Path(self._current_file)
+            self._status_info.setText(f"  {path.name}    {_format_size(path.stat().st_size)}")
+        self._status_mode.setText(_MODE_LABEL.get(mode, ""))
+        self._loader_thread = None
+
+    def _on_load_error(self, gen: int, msg: str) -> None:
+        if gen != self._load_gen:
+            return
+        self._set_loading(False)
+        self._loader_thread = None
+        QMessageBox.warning(self, "파일 오류", f"파일을 열 수 없습니다:\n{msg}")
 
     # ------------------------------------------------------------------
     # Slots
@@ -244,26 +407,45 @@ class MainWindow(QMainWindow):
         self._status_mode.setText("")
 
     def _on_file_opened(self, file_path: str) -> None:
+        self._cancel_loading()
         self._current_file = file_path
+        self._add_recent(file_path)
+
         mode = detect_viewer_mode(file_path)
+        self._pending_mode = mode
         path = Path(file_path)
 
-        if mode == ViewerMode.IMAGE:
-            self._viewer_stack.image_viewer.load_file(file_path)
-            self._set_image_mode()
-        elif mode == ViewerMode.CAD_2D:
-            self._viewer_stack.cad_viewer.load_file(file_path)
-            self._set_cad_mode()
-        elif mode == ViewerMode.MODEL_3D:
-            self._viewer_stack.model3d_viewer.load_file(file_path)
-            self._set_3d_mode()
-        else:
+        loader_fn = self._get_loader(mode, path.suffix.lower())
+        if loader_fn is None:
+            self._viewer_stack.switch_to(mode)
             self._set_back_only_mode()
+            self._status_info.setText(f"  {path.name}    {_format_size(path.stat().st_size)}")
+            self._status_mode.setText("")
+            return
 
         self._viewer_stack.switch_to(mode)
+        if mode == ViewerMode.IMAGE:
+            self._set_image_mode()
+        elif mode == ViewerMode.CAD_2D:
+            self._set_cad_mode()
+        elif mode == ViewerMode.MODEL_3D:
+            self._set_3d_mode()
+
+        self._set_loading(True)
         self._status_info.setText(f"  {path.name}    {_format_size(path.stat().st_size)}")
         self._status_zoom.setText("")
         self._status_mode.setText(_MODE_LABEL.get(mode, ""))
+
+        self._load_gen += 1
+        gen = self._load_gen
+        self._loader_thread = LoaderThread(loader_fn, file_path, self)
+        self._loader_thread.finished.connect(
+            lambda result, g=gen: self._on_load_finished(g, result)
+        )
+        self._loader_thread.error.connect(
+            lambda msg, g=gen: self._on_load_error(g, msg)
+        )
+        self._loader_thread.start()
 
     def _open_file_dialog(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "파일 열기", "", _OPEN_FILTER)
@@ -272,6 +454,7 @@ class MainWindow(QMainWindow):
 
     def _on_view_style(self, style: ViewStyle) -> None:
         self._viewer_stack.file_panel.set_view_style(style)
+        self._settings.setValue("viewStyle", _STYLE_TO_IDX[style])
 
     def _on_crop_toggle(self, checked: bool) -> None:
         iv = self._viewer_stack.image_viewer
@@ -287,6 +470,7 @@ class MainWindow(QMainWindow):
         iv = self._viewer_stack.image_viewer
         if iv.is_crop_mode:
             iv.exit_crop_mode()
+        self._cancel_loading()
         self._current_mode = ViewerMode.NONE
         self._viewer_stack.show_browser()
         self._set_browse_mode()
@@ -297,7 +481,7 @@ class MainWindow(QMainWindow):
         self._status_mode.setText("")
 
     # ------------------------------------------------------------------
-    # Generic viewer dispatch (zoom/fit shared between image and CAD)
+    # Generic viewer dispatch (zoom/fit shared between image, CAD, 3D)
     # ------------------------------------------------------------------
 
     def _zoom_in(self) -> None:

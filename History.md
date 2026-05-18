@@ -1,5 +1,30 @@
 # History
 
+## Release 0.7 — 2026-05-18
+
+### 7단계: 안정화 (QThread 비동기 로딩 · QSettings · 최근 파일)
+
+- `services/loader_thread.py` (신규) — QThread 기반 범용 비동기 로더
+  - `LoaderThread(fn, file_path, parent)`: 블로킹 로더 함수를 백그라운드 스레드에서 실행
+  - 성공 시 `finished(object)` 시그널, 실패 시 `error(str)` 시그널 발행
+  - 세대(generation) 카운터 방식으로 탐색 이탈 후 도착한 결과 자동 무시
+- 각 뷰어에 `display_X()` 메서드 추가 (비동기 결과 수신·표시 전용)
+  - `image_viewer.display_image(pil_image, file_path="")` — PIL 이미지 즉시 반영
+  - `cad_viewer.display_dxf(dxf_path)` — QPainterPath 즉시 반영
+  - `model3d_viewer.display_mesh(mesh)` — MeshData 즉시 반영
+- `ui/main_window.py` — 전면 리팩토링
+  - **비동기 로딩**: `_on_file_opened()` → `LoaderThread` 시작, 툴바 비활성화 + 상태바 "로딩 중..." 표시
+  - **세대 카운터**: `_load_gen` — 파일 전환 시 이전 스레드 결과 자동 무시
+  - **로딩 취소**: `_cancel_loading()` — 뒤로/다른 파일 열기/창 닫기 시 스레드 정리
+  - **QSettings**: `_restore_settings()` / `_save_settings()` / `closeEvent()`
+    - 저장 항목: 창 크기·위치(`geometry`·`windowState`), 마지막 폴더(`lastFolder`), 뷰 스타일(`viewStyle`), 최근 파일(`recentFiles`)
+    - 앱 재시작 시 마지막 폴더 자동 탐색, 뷰 스타일 복원
+  - **최근 파일**: 파일 메뉴 → "최근 파일" 서브메뉴 (최대 10개, 목록 지우기 포함)
+    - 파일 열 때마다 목록 맨 앞에 추가, 중복 제거
+    - 앱 종료 후 재시작해도 유지
+
+---
+
 ## Release 0.6 — 2026-05-18
 
 ### 6단계: STEP 3D 뷰어

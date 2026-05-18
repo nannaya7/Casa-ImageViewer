@@ -43,6 +43,18 @@ class Cad2DViewerWidget(QGraphicsView):
         self._scene.setSceneRect(dxf_path.boundingRect().adjusted(-10, -10, 10, 10))
         self.fit()
 
+    def display_dxf(self, dxf_path) -> None:
+        """Apply an already-loaded QPainterPath (called after async load)."""
+        self._scene.clear()
+        self._zoom = 1.0
+        self.resetTransform()
+        if dxf_path.isEmpty():
+            return
+        pen = QPen(self._ENTITY_COLOR, 0)
+        self._scene.addPath(dxf_path, pen)
+        self._scene.setSceneRect(dxf_path.boundingRect().adjusted(-10, -10, 10, 10))
+        self.fit()
+
     def fit(self) -> None:
         if self._scene.items():
             self.fitInView(self._scene.itemsBoundingRect(),

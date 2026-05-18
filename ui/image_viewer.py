@@ -60,6 +60,19 @@ class ImageViewerWidget(QGraphicsView):
         self._refresh_scene()
         self.fit()
 
+    def display_image(self, pil_image: Image.Image, file_path: str = "") -> None:
+        """Apply an already-loaded PIL image (called after async load)."""
+        self._file_path = file_path
+        self._pil_image = pil_image
+        self._zoom = 1.0
+        self._history.clear()
+        self.undo_available.emit(False)
+        if self._crop_mode:
+            self._exit_crop_internal()
+        self.resetTransform()
+        self._refresh_scene()
+        self.fit()
+
     def zoom_in(self) -> None:
         self._apply_zoom(self._ZOOM_STEP)
 
