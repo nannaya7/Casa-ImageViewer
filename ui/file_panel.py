@@ -42,6 +42,7 @@ class FilePanelWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._current_folder: str = ""
+        self._filter_query: str = ""
         self._icon_provider = QFileIconProvider()
         self._setup_ui()
 
@@ -118,6 +119,14 @@ class FilePanelWidget(QWidget):
 
     def load_folder(self, folder_path: str) -> None:
         self._current_folder = folder_path
+        self._filter_query = ""
+        self._reload()
+
+    def set_filter(self, query: str) -> None:
+        self._filter_query = query.strip().lower()
+        self._reload()
+
+    def _reload(self) -> None:
         entries = self._get_entries()
         self._populate_icon_list(self._large_list, entries)
         self._populate_icon_list(self._small_list, entries)
@@ -138,12 +147,15 @@ class FilePanelWidget(QWidget):
             folder = Path(self._current_folder)
             parent = folder.parent
             up = [parent] if parent != folder else []
+            q = self._filter_query
             dirs = sorted(
-                (e for e in folder.iterdir() if e.is_dir()),
+                (e for e in folder.iterdir()
+                 if e.is_dir() and (not q or q in e.name.lower())),
                 key=lambda p: p.name.lower(),
             )
             files = sorted(
-                (e for e in folder.iterdir() if e.is_file() and is_supported(e.name)),
+                (e for e in folder.iterdir()
+                 if e.is_file() and is_supported(e.name) and (not q or q in e.name.lower())),
                 key=lambda p: p.name.lower(),
             )
             return up + dirs + files

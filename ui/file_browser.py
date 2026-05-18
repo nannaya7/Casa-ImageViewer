@@ -20,10 +20,8 @@ class FileBrowserPanel(QWidget):
         layout.setSpacing(0)
 
         header = QLabel("  폴더")
+        header.setObjectName("folderHeader")
         header.setFixedHeight(28)
-        header.setStyleSheet(
-            "background-color: #2d2d2d; color: #cccccc; font-size: 12px;"
-        )
         layout.addWidget(header)
 
         self._fs_model = QFileSystemModel()

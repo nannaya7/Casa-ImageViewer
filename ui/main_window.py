@@ -2,11 +2,13 @@ from pathlib import Path
 
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QSplitter,
-    QToolBar, QStatusBar, QLabel, QVBoxLayout,
+    QStatusBar, QLabel, QVBoxLayout,
     QFileDialog, QApplication, QMenu, QMessageBox,
+    QPushButton, QButtonGroup, QFrame, QLineEdit,
+    QSizePolicy,
 )
 from PyQt6.QtCore import Qt, QSize, QSettings
-from PyQt6.QtGui import QAction, QActionGroup, QIcon, QCloseEvent
+from PyQt6.QtGui import QAction, QIcon, QCloseEvent, QKeySequence, QShortcut
 
 from ui.file_browser import FileBrowserPanel
 from ui.viewer_stack import ViewerStack
@@ -20,10 +22,10 @@ from loaders.stl_loader import load_stl
 
 
 _MODE_LABEL: dict[ViewerMode, str] = {
-    ViewerMode.IMAGE: "이미지",
-    ViewerMode.CAD_2D: "2D CAD",
+    ViewerMode.IMAGE:    "이미지",
+    ViewerMode.CAD_2D:  "2D CAD",
     ViewerMode.MODEL_3D: "3D 모델",
-    ViewerMode.NONE: "",
+    ViewerMode.NONE:    "",
 }
 
 _OPEN_FILTER = (
@@ -37,8 +39,8 @@ _OPEN_FILTER = (
 )
 
 _VIEW_STYLES: list[tuple[ViewStyle, str]] = [
-    (ViewStyle.LARGE_ICONS, "큰 아이콘"),
     (ViewStyle.SMALL_ICONS, "작은 아이콘"),
+    (ViewStyle.LARGE_ICONS, "큰 아이콘"),
     (ViewStyle.LIST,        "간단히"),
     (ViewStyle.DETAILS,     "자세히"),
 ]
@@ -76,6 +78,7 @@ class MainWindow(QMainWindow):
         self._setup_ui()
         self._setup_menubar()
         self._setup_statusbar()
+        self._setup_shortcuts()
         self._restore_settings()
 
     # ------------------------------------------------------------------
@@ -101,15 +104,15 @@ class MainWindow(QMainWindow):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(0)
 
-        self._toolbar = self._build_toolbar()
-        right_layout.addWidget(self._toolbar)
+        self._header_bar = self._build_header_bar()
+        right_layout.addWidget(self._header_bar)
 
         self._viewer_stack = ViewerStack()
         self._viewer_stack.file_panel.file_opened.connect(self._on_file_opened)
         self._viewer_stack.file_panel.folder_navigated.connect(self._on_folder_selected)
         iv = self._viewer_stack.image_viewer
         iv.crop_mode_exited.connect(self._on_crop_mode_exited)
-        iv.undo_available.connect(self._act_undo.setEnabled)
+        iv.undo_available.connect(self._btn_undo.setEnabled)
         right_layout.addWidget(self._viewer_stack)
 
         self._splitter.addWidget(self._file_browser)
@@ -120,109 +123,157 @@ class MainWindow(QMainWindow):
 
         root.addWidget(self._splitter)
 
-    def _build_toolbar(self) -> QToolBar:
-        tb = QToolBar("도구 모음")
-        tb.setMovable(False)
-        tb.setIconSize(QSize(20, 20))
+    def _build_header_bar(self) -> QWidget:
+        container = QWidget()
+        container.setObjectName("headerBar")
+        container.setFixedHeight(52)
 
-        # ── 뒤로 ──────────────────────────────────────────────────────
-        self._act_back = QAction("← 뒤로", self)
-        self._act_back.setShortcut("Alt+Left")
-        self._act_back.triggered.connect(self._go_back)
-        tb.addAction(self._act_back)
-        self._sep_back = tb.addSeparator()
+        outer = QHBoxLayout(container)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        # ── 탐색 모드: 뷰 스타일 ───────────────────────────────────────
-        self._browse_acts: list[QAction] = []
-        group = QActionGroup(self)
-        group.setExclusive(True)
-        self._view_actions: dict[ViewStyle, QAction] = {}
+        # ── Browse-mode bar ───────────────────────────────────────────
+        self._browse_bar = QWidget()
+        self._browse_bar.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        bl = QHBoxLayout(self._browse_bar)
+        bl.setContentsMargins(12, 9, 12, 9)
+        bl.setSpacing(8)
+
+        btn_open = QPushButton("  열기")
+        btn_open.setObjectName("btnOpen")
+        btn_open.setIcon(
+            self.style().standardIcon(
+                self.style().StandardPixmap.SP_DirOpenIcon
+            )
+        )
+        btn_open.setIconSize(QSize(18, 18))
+        btn_open.setFixedHeight(34)
+        btn_open.clicked.connect(self._open_file_dialog)
+        bl.addWidget(btn_open)
+
+        bl.addStretch(1)
+
+        seg_frame = QFrame()
+        seg_frame.setObjectName("segGroup")
+        seg_frame.setFixedHeight(34)
+        sl = QHBoxLayout(seg_frame)
+        sl.setContentsMargins(3, 3, 3, 3)
+        sl.setSpacing(0)
+
+        self._style_btn_group = QButtonGroup(self)
+        self._style_btn_group.setExclusive(True)
+        self._style_buttons: dict[ViewStyle, QPushButton] = {}
 
         for style, label in _VIEW_STYLES:
-            act = QAction(label, self)
-            act.setCheckable(True)
-            act.triggered.connect(lambda checked, s=style: self._on_view_style(s))
-            group.addAction(act)
-            tb.addAction(act)
-            self._view_actions[style] = act
-            self._browse_acts.append(act)
-        self._view_actions[ViewStyle.LARGE_ICONS].setChecked(True)
+            btn = QPushButton(label)
+            btn.setObjectName("segBtn")
+            btn.setCheckable(True)
+            btn.setFixedHeight(28)
+            btn.clicked.connect(lambda checked, s=style: self._on_view_style(s))
+            self._style_btn_group.addButton(btn)
+            self._style_buttons[style] = btn
+            sl.addWidget(btn)
 
-        # ── 이미지 전용: 편집 ──────────────────────────────────────────
-        self._image_only_acts: list[QAction] = []
+        self._style_buttons[ViewStyle.LARGE_ICONS].setChecked(True)
+        bl.addWidget(seg_frame)
 
-        sep_edit = tb.addSeparator()
-        self._image_only_acts.append(sep_edit)
+        bl.addStretch(1)
 
-        self._act_undo = QAction("실행 취소", self)
-        self._act_undo.setShortcut("Ctrl+Z")
-        self._act_undo.setEnabled(False)
-        self._act_undo.triggered.connect(lambda: self._viewer_stack.image_viewer.undo())
-        tb.addAction(self._act_undo)
-        self._image_only_acts.append(self._act_undo)
+        self._search_box = QLineEdit()
+        self._search_box.setObjectName("searchBox")
+        self._search_box.setPlaceholderText("검색")
+        self._search_box.setFixedSize(200, 34)
+        self._search_box.textChanged.connect(self._on_search)
+        bl.addWidget(self._search_box)
 
-        sep_edit2 = tb.addSeparator()
-        self._image_only_acts.append(sep_edit2)
+        # ── Viewer-mode bar ───────────────────────────────────────────
+        self._viewer_bar = QWidget()
+        self._viewer_bar.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        vl = QHBoxLayout(self._viewer_bar)
+        vl.setContentsMargins(12, 9, 12, 9)
+        vl.setSpacing(4)
 
-        self._act_crop = QAction("자르기", self)
-        self._act_crop.setCheckable(True)
-        self._act_crop.triggered.connect(self._on_crop_toggle)
-        tb.addAction(self._act_crop)
-        self._image_only_acts.append(self._act_crop)
+        self._btn_back = QPushButton("← 뒤로")
+        self._btn_back.setObjectName("btnBack")
+        self._btn_back.setFixedHeight(34)
+        self._btn_back.clicked.connect(self._go_back)
+        vl.addWidget(self._btn_back)
 
-        act_resize = QAction("크기 조정", self)
-        act_resize.triggered.connect(lambda: self._viewer_stack.image_viewer.open_resize_dialog())
-        tb.addAction(act_resize)
-        self._image_only_acts.append(act_resize)
+        # Image-only group (sep + edit controls)
+        self._image_grp = QWidget()
+        ig = QHBoxLayout(self._image_grp)
+        ig.setContentsMargins(0, 0, 0, 0)
+        ig.setSpacing(4)
+        ig.addWidget(_make_vsep())
 
-        # ── 공용 뷰어: 확대/축소/맞춤 ─────────────────────────────────
-        self._viewer_acts: list[QAction] = []
+        self._btn_undo = QPushButton("↩ 취소")
+        self._btn_undo.setFixedHeight(34)
+        self._btn_undo.setEnabled(False)
+        self._btn_undo.clicked.connect(lambda: self._viewer_stack.image_viewer.undo())
+        ig.addWidget(self._btn_undo)
 
-        sep_zoom = tb.addSeparator()
-        self._viewer_acts.append(sep_zoom)
+        self._btn_crop = QPushButton("✂ 자르기")
+        self._btn_crop.setCheckable(True)
+        self._btn_crop.setFixedHeight(34)
+        self._btn_crop.clicked.connect(self._on_crop_toggle)
+        ig.addWidget(self._btn_crop)
 
-        act_zoom_in = QAction("확대", self)
-        act_zoom_in.setShortcut("Ctrl++")
-        act_zoom_in.triggered.connect(self._zoom_in)
-        tb.addAction(act_zoom_in)
-        self._viewer_acts.append(act_zoom_in)
+        btn_resize = QPushButton("크기 조정")
+        btn_resize.setFixedHeight(34)
+        btn_resize.clicked.connect(lambda: self._viewer_stack.image_viewer.open_resize_dialog())
+        ig.addWidget(btn_resize)
 
-        act_zoom_out = QAction("축소", self)
-        act_zoom_out.setShortcut("Ctrl+-")
-        act_zoom_out.triggered.connect(self._zoom_out)
-        tb.addAction(act_zoom_out)
-        self._viewer_acts.append(act_zoom_out)
+        vl.addWidget(self._image_grp)
 
-        act_fit = QAction("화면 맞춤", self)
-        act_fit.setShortcut("Ctrl+0")
-        act_fit.triggered.connect(self._fit)
-        tb.addAction(act_fit)
-        self._viewer_acts.append(act_fit)
+        # Common zoom group (sep + zoom controls)
+        self._zoom_grp = QWidget()
+        zg = QHBoxLayout(self._zoom_grp)
+        zg.setContentsMargins(0, 0, 0, 0)
+        zg.setSpacing(4)
+        zg.addWidget(_make_vsep())
 
-        # ── 이미지 전용: 회전 + 저장 ──────────────────────────────────
-        sep_rot = tb.addSeparator()
-        self._image_only_acts.append(sep_rot)
+        for label, slot in (("확대", self._zoom_in), ("축소", self._zoom_out), ("맞춤", self._fit)):
+            b = QPushButton(label)
+            b.setFixedHeight(34)
+            b.clicked.connect(slot)
+            zg.addWidget(b)
 
-        for label, slot in (
-            ("↻ 시계방향",  lambda: self._viewer_stack.image_viewer.rotate_cw()),
-            ("↺ 반시계방향", lambda: self._viewer_stack.image_viewer.rotate_ccw()),
-        ):
-            act = QAction(label, self)
-            act.triggered.connect(slot)
-            tb.addAction(act)
-            self._image_only_acts.append(act)
+        vl.addWidget(self._zoom_grp)
 
-        sep_save = tb.addSeparator()
-        self._image_only_acts.append(sep_save)
+        # Rotate/save group (sep + rotate + save)
+        self._rot_grp = QWidget()
+        rg = QHBoxLayout(self._rot_grp)
+        rg.setContentsMargins(0, 0, 0, 0)
+        rg.setSpacing(4)
+        rg.addWidget(_make_vsep())
 
-        act_save = QAction("다른 이름으로 저장", self)
-        act_save.setShortcut("Ctrl+Shift+S")
-        act_save.triggered.connect(lambda: self._viewer_stack.image_viewer.save_as())
-        tb.addAction(act_save)
-        self._image_only_acts.append(act_save)
+        btn_cw = QPushButton("↻")
+        btn_cw.setFixedSize(34, 34)
+        btn_cw.clicked.connect(lambda: self._viewer_stack.image_viewer.rotate_cw())
+        rg.addWidget(btn_cw)
 
-        self._set_browse_mode()
-        return tb
+        btn_ccw = QPushButton("↺")
+        btn_ccw.setFixedSize(34, 34)
+        btn_ccw.clicked.connect(lambda: self._viewer_stack.image_viewer.rotate_ccw())
+        rg.addWidget(btn_ccw)
+
+        btn_save = QPushButton("저장")
+        btn_save.setFixedHeight(34)
+        btn_save.clicked.connect(lambda: self._viewer_stack.image_viewer.save_as())
+        rg.addWidget(btn_save)
+
+        vl.addWidget(self._rot_grp)
+        vl.addStretch(1)
+
+        outer.addWidget(self._browse_bar)
+        outer.addWidget(self._viewer_bar)
+
+        self._viewer_bar.setVisible(False)
+        return container
 
     def _setup_menubar(self) -> None:
         mb = self.menuBar()
@@ -247,21 +298,36 @@ class MainWindow(QMainWindow):
         file_menu.addAction(quit_act)
 
         mb.addMenu("보기(&V)")
+        mb.addMenu("도구(&T)")
+        mb.addMenu("도움말(&H)")
 
     def _setup_statusbar(self) -> None:
         bar = QStatusBar()
         self.setStatusBar(bar)
-        self._status_info = QLabel("폴더를 선택하세요")
+        self._status_info    = QLabel("  폴더를 선택하세요")
         self._status_loading = QLabel("")
-        self._status_zoom = QLabel("")
-        self._status_mode = QLabel("")
+        self._status_zoom    = QLabel("")
+        self._status_mode    = QLabel("")
         bar.addWidget(self._status_info, 1)
         bar.addPermanentWidget(self._status_loading)
         bar.addPermanentWidget(self._status_zoom)
         bar.addPermanentWidget(self._status_mode)
 
+    def _setup_shortcuts(self) -> None:
+        QShortcut(QKeySequence("Alt+Left"), self).activated.connect(self._go_back)
+        QShortcut(QKeySequence("Ctrl+Z"),   self).activated.connect(
+            lambda: self._viewer_stack.image_viewer.undo()
+        )
+        QShortcut(QKeySequence("Ctrl++"),   self).activated.connect(self._zoom_in)
+        QShortcut(QKeySequence("Ctrl+="),   self).activated.connect(self._zoom_in)
+        QShortcut(QKeySequence("Ctrl+-"),   self).activated.connect(self._zoom_out)
+        QShortcut(QKeySequence("Ctrl+0"),   self).activated.connect(self._fit)
+        QShortcut(QKeySequence("Ctrl+Shift+S"), self).activated.connect(
+            lambda: self._viewer_stack.image_viewer.save_as()
+        )
+
     # ------------------------------------------------------------------
-    # Settings — persist across sessions
+    # Settings
     # ------------------------------------------------------------------
 
     def _restore_settings(self) -> None:
@@ -275,7 +341,7 @@ class MainWindow(QMainWindow):
         style_idx = int(self._settings.value("viewStyle", 0))
         style = _IDX_TO_STYLE.get(style_idx, ViewStyle.LARGE_ICONS)
         self._viewer_stack.file_panel.set_view_style(style)
-        self._view_actions[style].setChecked(True)
+        self._style_buttons[style].setChecked(True)
 
         recent = self._settings.value("recentFiles") or []
         if isinstance(recent, str):
@@ -295,7 +361,7 @@ class MainWindow(QMainWindow):
             self._settings.setValue("lastFolder", folder)
         self._settings.setValue("recentFiles", self._recent_files)
         style = next(
-            (s for s, a in self._view_actions.items() if a.isChecked()),
+            (s for s, b in self._style_buttons.items() if b.isChecked()),
             ViewStyle.LARGE_ICONS,
         )
         self._settings.setValue("viewStyle", _STYLE_TO_IDX[style])
@@ -343,7 +409,6 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _get_loader(self, mode: ViewerMode, ext: str):
-        """Return the appropriate loader callable for the given mode/extension."""
         if mode == ViewerMode.IMAGE:
             return load_image
         if mode == ViewerMode.CAD_2D:
@@ -356,11 +421,10 @@ class MainWindow(QMainWindow):
         return None
 
     def _set_loading(self, loading: bool) -> None:
-        self._toolbar.setEnabled(not loading)
+        self._header_bar.setEnabled(not loading)
         self._status_loading.setText("  로딩 중...  " if loading else "")
 
     def _cancel_loading(self) -> None:
-        """Invalidate any pending load result and try to stop the thread."""
         self._load_gen += 1
         if self._loader_thread is not None:
             if self._loader_thread.isRunning():
@@ -371,7 +435,7 @@ class MainWindow(QMainWindow):
 
     def _on_load_finished(self, gen: int, result) -> None:
         if gen != self._load_gen:
-            return  # stale result — user already navigated away
+            return
         mode = self._pending_mode
         if mode == ViewerMode.IMAGE:
             self._viewer_stack.image_viewer.display_image(result, self._current_file or "")
@@ -382,7 +446,9 @@ class MainWindow(QMainWindow):
         self._set_loading(False)
         if self._current_file:
             path = Path(self._current_file)
-            self._status_info.setText(f"  {path.name}    {_format_size(path.stat().st_size)}")
+            self._status_info.setText(
+                f"  {path.name}    {_format_size(path.stat().st_size)}"
+            )
         self._status_mode.setText(_MODE_LABEL.get(mode, ""))
         self._loader_thread = None
 
@@ -398,11 +464,14 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _on_folder_selected(self, folder_path: str) -> None:
+        self._search_box.blockSignals(True)
+        self._search_box.clear()
+        self._search_box.blockSignals(False)
         self._viewer_stack.file_panel.load_folder(folder_path)
         self._viewer_stack.show_browser()
         self._set_browse_mode()
         count = self._viewer_stack.file_panel.file_count()
-        self._status_info.setText(f"  {folder_path}    ({count}개 항목)")
+        self._status_info.setText(f"  {folder_path}    {count}개 항목")
         self._status_zoom.setText("")
         self._status_mode.setText("")
 
@@ -419,7 +488,9 @@ class MainWindow(QMainWindow):
         if loader_fn is None:
             self._viewer_stack.switch_to(mode)
             self._set_back_only_mode()
-            self._status_info.setText(f"  {path.name}    {_format_size(path.stat().st_size)}")
+            self._status_info.setText(
+                f"  {path.name}    {_format_size(path.stat().st_size)}"
+            )
             self._status_mode.setText("")
             return
 
@@ -456,6 +527,9 @@ class MainWindow(QMainWindow):
         self._viewer_stack.file_panel.set_view_style(style)
         self._settings.setValue("viewStyle", _STYLE_TO_IDX[style])
 
+    def _on_search(self, text: str) -> None:
+        self._viewer_stack.file_panel.set_filter(text)
+
     def _on_crop_toggle(self, checked: bool) -> None:
         iv = self._viewer_stack.image_viewer
         if checked:
@@ -464,7 +538,7 @@ class MainWindow(QMainWindow):
             iv.exit_crop_mode()
 
     def _on_crop_mode_exited(self) -> None:
-        self._act_crop.setChecked(False)
+        self._btn_crop.setChecked(False)
 
     def _go_back(self) -> None:
         iv = self._viewer_stack.image_viewer
@@ -475,13 +549,13 @@ class MainWindow(QMainWindow):
         self._viewer_stack.show_browser()
         self._set_browse_mode()
         folder = self._viewer_stack.file_panel._current_folder
-        count = self._viewer_stack.file_panel.file_count()
-        self._status_info.setText(f"  {folder}    ({count}개 항목)")
+        count  = self._viewer_stack.file_panel.file_count()
+        self._status_info.setText(f"  {folder}    {count}개 항목")
         self._status_zoom.setText("")
         self._status_mode.setText("")
 
     # ------------------------------------------------------------------
-    # Generic viewer dispatch (zoom/fit shared between image, CAD, 3D)
+    # Zoom / fit dispatch
     # ------------------------------------------------------------------
 
     def _zoom_in(self) -> None:
@@ -509,69 +583,59 @@ class MainWindow(QMainWindow):
             self._viewer_stack.model3d_viewer.fit()
 
     # ------------------------------------------------------------------
-    # Toolbar mode switch
+    # Header-bar mode switch
     # ------------------------------------------------------------------
 
     def _set_browse_mode(self) -> None:
         self._current_mode = ViewerMode.NONE
-        self._act_back.setVisible(False)
-        self._sep_back.setVisible(False)
-        for act in self._browse_acts:
-            act.setVisible(True)
-        for act in self._image_only_acts:
-            act.setVisible(False)
-        for act in self._viewer_acts:
-            act.setVisible(False)
+        self._browse_bar.setVisible(True)
+        self._viewer_bar.setVisible(False)
 
     def _set_image_mode(self) -> None:
         self._current_mode = ViewerMode.IMAGE
-        self._act_back.setVisible(True)
-        self._sep_back.setVisible(True)
-        for act in self._browse_acts:
-            act.setVisible(False)
-        for act in self._image_only_acts:
-            act.setVisible(True)
-        for act in self._viewer_acts:
-            act.setVisible(True)
-        self._act_crop.setChecked(False)
+        self._browse_bar.setVisible(False)
+        self._viewer_bar.setVisible(True)
+        self._image_grp.setVisible(True)
+        self._zoom_grp.setVisible(True)
+        self._rot_grp.setVisible(True)
+        self._btn_crop.setChecked(False)
 
     def _set_cad_mode(self) -> None:
         self._current_mode = ViewerMode.CAD_2D
-        self._act_back.setVisible(True)
-        self._sep_back.setVisible(True)
-        for act in self._browse_acts:
-            act.setVisible(False)
-        for act in self._image_only_acts:
-            act.setVisible(False)
-        for act in self._viewer_acts:
-            act.setVisible(True)
+        self._browse_bar.setVisible(False)
+        self._viewer_bar.setVisible(True)
+        self._image_grp.setVisible(False)
+        self._zoom_grp.setVisible(True)
+        self._rot_grp.setVisible(False)
 
     def _set_3d_mode(self) -> None:
         self._current_mode = ViewerMode.MODEL_3D
-        self._act_back.setVisible(True)
-        self._sep_back.setVisible(True)
-        for act in self._browse_acts:
-            act.setVisible(False)
-        for act in self._image_only_acts:
-            act.setVisible(False)
-        for act in self._viewer_acts:
-            act.setVisible(True)
+        self._browse_bar.setVisible(False)
+        self._viewer_bar.setVisible(True)
+        self._image_grp.setVisible(False)
+        self._zoom_grp.setVisible(True)
+        self._rot_grp.setVisible(False)
 
     def _set_back_only_mode(self) -> None:
         self._current_mode = ViewerMode.NONE
-        self._act_back.setVisible(True)
-        self._sep_back.setVisible(True)
-        for act in self._browse_acts:
-            act.setVisible(False)
-        for act in self._image_only_acts:
-            act.setVisible(False)
-        for act in self._viewer_acts:
-            act.setVisible(False)
+        self._browse_bar.setVisible(False)
+        self._viewer_bar.setVisible(True)
+        self._image_grp.setVisible(False)
+        self._zoom_grp.setVisible(False)
+        self._rot_grp.setVisible(False)
 
 
 # ------------------------------------------------------------------
-# Helper
+# Helpers
 # ------------------------------------------------------------------
+
+def _make_vsep() -> QWidget:
+    sep = QWidget()
+    sep.setObjectName("vSep")
+    sep.setFixedWidth(1)
+    sep.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+    return sep
+
 
 def _format_size(n: int) -> str:
     for unit, threshold in (("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)):
