@@ -6,7 +6,7 @@ from PyQt6.QtWidgets import (
     QFileDialog, QApplication,
 )
 from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QAction, QActionGroup
+from PyQt6.QtGui import QAction, QActionGroup, QIcon
 
 from ui.file_browser import FileBrowserPanel
 from ui.viewer_stack import ViewerStack
@@ -39,10 +39,15 @@ _VIEW_STYLES: list[tuple[ViewStyle, str]] = [
 ]
 
 
+_WINDOW_ICON = Path(__file__).parent.parent / "image" / "icon" / "Casa-ImageViewer-ICON.png"
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Image & CAD Integrated Viewer")
+        if _WINDOW_ICON.exists():
+            self.setWindowIcon(QIcon(str(_WINDOW_ICON)))
         self.resize(1280, 800)
         self._current_file: str | None = None
         self._current_mode: ViewerMode = ViewerMode.NONE

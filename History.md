@@ -1,5 +1,22 @@
 # History
 
+## Release 0.6 — 2026-05-18
+
+### 6단계: STEP 3D 뷰어
+
+- `loaders/step_loader.py` — cadquery-ocp(OCP) 기반 STEP 파서
+  - `STEPControl_Reader`로 STEP 파일 읽기 및 전송 (`TransferRoots → OneShape`)
+  - `BRepMesh_IncrementalMesh(shape, 0.1, False, 0.5)` 로 OCC 메시 생성 (선형 편차 0.1, 각도 편차 0.5 rad)
+  - `StlAPI_Writer`로 임시 바이너리 STL 변환 후 기존 `load_stl()` 재활용 → `MeshData` 반환
+  - cadquery 미설치 시 명확한 설치 안내 메시지 표시
+  - OCP 모듈 경로: `OCP.STEPControl`, `OCP.BRepMesh`, `OCP.StlAPI` (cadquery-ocp 번들)
+- `ui/model3d_viewer.py` — STEP 분기 추가
+  - `load_file()`: 확장자 `.step`/`.stp` → `load_step()`, 나머지 → `load_stl()` 로 분기
+  - 에러 타이틀을 "STL 오류" → "3D 모델 오류"로 일반화
+- `requirements.txt` — `cadquery>=2.4.0` 추가 (OCP 번들 포함)
+
+---
+
 ## Release 0.5 — 2026-05-18
 
 ### 5단계: STL 3D 뷰어

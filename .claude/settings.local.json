@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from OCC.Core.STEPControl import STEPControl_Reader; print\\('pythonocc-core OK'\\)\")",
+      "PowerShell(pip install pythonocc-core 2>&1)",
+      "PowerShell(python --version)",
+      "PowerShell(conda --version 2>&1)"
+    ]
+  }
+}

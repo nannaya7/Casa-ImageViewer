@@ -1,4 +1,5 @@
 import math
+from pathlib import Path
 
 import numpy as np
 from PyQt6.QtCore import Qt, QPoint
@@ -37,10 +38,15 @@ class Model3DViewerWidget(QOpenGLWidget):
     # ------------------------------------------------------------------
 
     def load_file(self, file_path: str) -> None:
+        ext = Path(file_path).suffix.lower()
         try:
-            self._mesh = load_stl(file_path)
+            if ext in (".step", ".stp"):
+                from loaders.step_loader import load_step
+                self._mesh = load_step(file_path)
+            else:
+                self._mesh = load_stl(file_path)
         except Exception as exc:
-            QMessageBox.warning(self, "STL 오류", f"파일을 열 수 없습니다:\n{exc}")
+            QMessageBox.warning(self, "3D 모델 오류", f"파일을 열 수 없습니다:\n{exc}")
             self._mesh = None
         self.fit()
         self.update()
