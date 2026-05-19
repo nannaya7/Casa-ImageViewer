@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
 )
 from PyQt6.QtCore import Qt, QSize, QSettings
-from PyQt6.QtGui import QAction, QIcon, QCloseEvent, QKeySequence, QShortcut
+from PyQt6.QtGui import QAction, QActionGroup, QIcon, QCloseEvent, QKeySequence, QShortcut
 
 from ui.file_browser import FileBrowserPanel
 from ui.viewer_stack import ViewerStack
@@ -39,8 +39,8 @@ _OPEN_FILTER = (
 )
 
 _VIEW_STYLES: list[tuple[ViewStyle, str]] = [
-    (ViewStyle.SMALL_ICONS, "작은 아이콘"),
-    (ViewStyle.LARGE_ICONS, "큰 아이콘"),
+    (ViewStyle.LARGE_ICONS, "미리보기"),
+    (ViewStyle.SMALL_ICONS, "아이콘"),
     (ViewStyle.LIST,        "간단히"),
     (ViewStyle.DETAILS,     "자세히"),
 ]
@@ -176,7 +176,7 @@ class MainWindow(QMainWindow):
             self._style_buttons[style] = btn
             sl.addWidget(btn)
 
-        self._style_buttons[ViewStyle.LARGE_ICONS].setChecked(True)
+        self._style_buttons[ViewStyle.SMALL_ICONS].setChecked(True)
         bl.addWidget(seg_frame)
 
         bl.addStretch(1)
@@ -297,9 +297,23 @@ class MainWindow(QMainWindow):
         quit_act.triggered.connect(QApplication.quit)
         file_menu.addAction(quit_act)
 
-        mb.addMenu("보기(&V)")
-        mb.addMenu("도구(&T)")
-        mb.addMenu("도움말(&H)")
+        view_menu = mb.addMenu("보기(&V)")
+        view_group = QActionGroup(self)
+        view_group.setExclusive(True)
+        self._view_actions: dict[ViewStyle, QAction] = {}
+        for style, label in _VIEW_STYLES:
+            act = QAction(label, self)
+            act.setCheckable(True)
+            act.triggered.connect(lambda checked, s=style: self._on_view_style(s))
+            view_group.addAction(act)
+            view_menu.addAction(act)
+            self._view_actions[style] = act
+
+        tools_menu = mb.addMenu("도구(&T)")
+        tools_menu.setEnabled(False)
+
+        help_menu = mb.addMenu("도움말(&H)")
+        help_menu.setEnabled(False)
 
     def _setup_statusbar(self) -> None:
         bar = QStatusBar()
@@ -338,10 +352,11 @@ class MainWindow(QMainWindow):
         if state is not None:
             self.restoreState(state)
 
-        style_idx = int(self._settings.value("viewStyle", 0))
-        style = _IDX_TO_STYLE.get(style_idx, ViewStyle.LARGE_ICONS)
+        style_idx = int(self._settings.value("viewStyle", _STYLE_TO_IDX[ViewStyle.SMALL_ICONS]))
+        style = _IDX_TO_STYLE.get(style_idx, ViewStyle.SMALL_ICONS)
         self._viewer_stack.file_panel.set_view_style(style)
         self._style_buttons[style].setChecked(True)
+        self._view_actions[style].setChecked(True)
 
         recent = self._settings.value("recentFiles") or []
         if isinstance(recent, str):
@@ -463,6 +478,16 @@ class MainWindow(QMainWindow):
     # Slots
     # ------------------------------------------------------------------
 
+    def open_file(self, path: str) -> None:
+        """Open a file directly — used when launched with a CLI/file-association argument."""
+        p = Path(path)
+        if not p.is_file():
+            return
+        parent = str(p.parent)
+        self._file_browser.navigate_to(parent)
+        self._on_folder_selected(parent)
+        self._on_file_opened(path)
+
     def _on_folder_selected(self, folder_path: str) -> None:
         self._search_box.blockSignals(True)
         self._search_box.clear()
@@ -526,6 +551,8 @@ class MainWindow(QMainWindow):
     def _on_view_style(self, style: ViewStyle) -> None:
         self._viewer_stack.file_panel.set_view_style(style)
         self._settings.setValue("viewStyle", _STYLE_TO_IDX[style])
+        self._style_buttons[style].setChecked(True)
+        self._view_actions[style].setChecked(True)
 
     def _on_search(self, text: str) -> None:
         self._viewer_stack.file_panel.set_filter(text)

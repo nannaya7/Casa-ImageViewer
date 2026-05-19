@@ -5,12 +5,55 @@ from datetime import datetime
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QListWidget, QListWidgetItem,
     QTreeWidget, QTreeWidgetItem, QStackedWidget,
-    QAbstractItemView, QListView,
+    QAbstractItemView, QListView, QFileIconProvider,
 )
-from PyQt6.QtCore import Qt, QSize, QFileInfo, pyqtSignal
-from PyQt6.QtWidgets import QFileIconProvider
+from PyQt6.QtCore import Qt, QSize, QFileInfo, pyqtSignal, QObject, QThread
+from PyQt6.QtGui import QImageReader, QImage, QPixmap, QIcon, QPainter
 
 from services.file_type_detector import is_supported
+from ui.folder_icons import make_folder_icon
+
+_OVERLAY_GRAB = 0.45  # bottom-left fraction to capture the shortcut arrow
+
+_THUMB_EXTS = frozenset({
+    '.png', '.jpg', '.jpeg', '.bmp', '.gif',
+    '.tif', '.tiff', '.webp',
+    '.ppm', '.pgm', '.pbm', '.pnm',
+})
+
+
+class _ThumbnailWorker(QObject):
+    ready = pyqtSignal(int, QImage)
+    finished = pyqtSignal()
+
+    def __init__(self, entries: list, max_size: int):
+        super().__init__()
+        self._entries = entries
+        self._max_size = max_size
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        self._cancelled = True
+
+    def run(self) -> None:
+        for idx, path in enumerate(self._entries):
+            if self._cancelled:
+                break
+            if not (path.is_file() and path.suffix.lower() in _THUMB_EXTS):
+                continue
+            reader = QImageReader(str(path))
+            reader.setAutoTransform(True)
+            orig = reader.size()
+            if orig.isValid() and orig.width() > 0 and orig.height() > 0:
+                scaled = orig.scaled(
+                    QSize(self._max_size, self._max_size),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                )
+                reader.setScaledSize(scaled)
+            img = reader.read()
+            if not img.isNull():
+                self.ready.emit(idx, img)
+        self.finished.emit()
 
 
 class ViewStyle(Enum):
@@ -44,6 +87,9 @@ class FilePanelWidget(QWidget):
         self._current_folder: str = ""
         self._filter_query: str = ""
         self._icon_provider = QFileIconProvider()
+        self._thumb_thread: QThread | None = None
+        self._thumb_worker: _ThumbnailWorker | None = None
+        self._thumb_gen: int = 0
         self._setup_ui()
 
     # ------------------------------------------------------------------
@@ -59,13 +105,13 @@ class FilePanelWidget(QWidget):
 
         self._large_list = self._make_list(
             QListView.ViewMode.IconMode,
-            icon_size=QSize(64, 64),
-            grid_size=QSize(100, 90),
+            icon_size=QSize(128, 128),
+            grid_size=QSize(200, 180),
         )
         self._small_list = self._make_list(
             QListView.ViewMode.IconMode,
-            icon_size=QSize(24, 24),
-            grid_size=QSize(160, 32),
+            icon_size=QSize(64, 64),
+            grid_size=QSize(100, 90),
         )
         self._list_view = self._make_list(
             QListView.ViewMode.ListMode,
@@ -132,6 +178,7 @@ class FilePanelWidget(QWidget):
         self._populate_icon_list(self._small_list, entries)
         self._populate_icon_list(self._list_view, entries)
         self._populate_details(entries)
+        self._start_thumbnail_loading(entries)
 
     def file_count(self) -> int:
         return self._large_list.count()
@@ -139,6 +186,36 @@ class FilePanelWidget(QWidget):
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
+
+    def _cancel_thumbnails(self) -> None:
+        self._thumb_gen += 1
+        if self._thumb_worker is not None:
+            self._thumb_worker.cancel()
+        if self._thumb_thread is not None:
+            self._thumb_thread.quit()
+            self._thumb_thread.wait(300)
+        self._thumb_thread = None
+        self._thumb_worker = None
+
+    def _start_thumbnail_loading(self, entries: list[Path]) -> None:
+        self._cancel_thumbnails()
+        gen = self._thumb_gen
+        worker = _ThumbnailWorker(entries, 128)
+        thread = QThread()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.ready.connect(lambda idx, img, g=gen: self._on_thumbnail_ready(idx, img, g))
+        worker.finished.connect(thread.quit)
+        self._thumb_worker = worker
+        self._thumb_thread = thread
+        thread.start()
+
+    def _on_thumbnail_ready(self, idx: int, img: QImage, gen: int) -> None:
+        if gen != self._thumb_gen:
+            return
+        item = self._large_list.item(idx)
+        if item is not None:
+            item.setIcon(QIcon(QPixmap.fromImage(img)))
 
     def _get_entries(self) -> list[Path]:
         if not self._current_folder:
@@ -162,8 +239,50 @@ class FilePanelWidget(QWidget):
         except PermissionError:
             return []
 
-    def _get_icon(self, path: Path):
-        return self._icon_provider.icon(QFileInfo(str(path)))
+    def _get_icon(self, path: Path) -> QIcon:
+        if path.is_dir():
+            return make_folder_icon(path)
+        icon = self._icon_provider.icon(QFileInfo(str(path)))
+        if path.is_symlink() or path.suffix.lower() == '.lnk':
+            icon = self._resize_shortcut_overlay(path, icon)
+        return icon
+
+    def _resize_shortcut_overlay(self, path: Path, full_icon: QIcon) -> QIcon:
+        try:
+            if path.is_symlink():
+                base_icon = self._icon_provider.icon(QFileInfo(str(path.resolve(strict=False))))
+            elif path.is_dir():
+                base_icon = self._icon_provider.icon(QFileIconProvider.IconType.Folder)
+            else:
+                base_icon = self._icon_provider.icon(QFileIconProvider.IconType.File)
+        except OSError:
+            return full_icon
+
+        sizes = full_icon.availableSizes() or [QSize(32, 32)]
+        result = QIcon()
+        for sz in sizes:
+            full_pm = full_icon.pixmap(sz)
+            base_pm = base_icon.pixmap(sz)
+            if full_pm.isNull() or base_pm.isNull():
+                result.addPixmap(full_pm)
+                continue
+
+            h = sz.height()
+            grab = int(min(sz.width(), h) * _OVERLAY_GRAB)
+            src = full_pm.copy(0, h - grab, grab, grab)
+            small = int(grab * 0.65)
+            arrow = src.scaled(
+                small, small,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            composite = base_pm.copy()
+            p = QPainter(composite)
+            p.drawPixmap(0, h - small, arrow)
+            p.end()
+            result.addPixmap(composite)
+
+        return result if not result.isNull() else full_icon
 
     def _populate_icon_list(self, widget: QListWidget, entries: list[Path]) -> None:
         widget.clear()

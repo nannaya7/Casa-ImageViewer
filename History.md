@@ -1,5 +1,68 @@
 # History
 
+## Release 0.9 — 2026-05-19
+
+### UI 개선 (파일 연결 · 폴더 트리 · 아이콘 뷰 · 썸네일)
+
+#### 파일 연결 지원 (`main.py`)
+
+- `sys.argv[1]` 경로를 받아 탐색기 더블클릭으로 바로 파일 열기
+- `QTimer.singleShot(0, ...)` 으로 윈도우 표시 후 `window.open_file()` 호출
+
+#### 폴더 트리 화살표 스타일 (`ui/file_browser.py`)
+
+- `_ArrowBranchStyle(QProxyStyle)` 클래스 추가
+  - `PE_IndicatorBranch` 오버라이드: 접힌 폴더 `>`, 열린 폴더 `v` 쉐브론 그리기
+  - 리프 노드(파일 없는 항목)는 아무것도 그리지 않아 모든 연결선 제거
+  - `QLineF` + 안티앨리어싱으로 부드러운 화살표 (`hw=1.76, hh=2.82`)
+  - 색상: `#8A7060` (앱 테마 갈색 계열)
+- `QTreeView::branch` QSS 규칙 완전 제거 — QSS 엔진이 개입하면 QProxyStyle이 무시되는 문제 방지
+- `navigate_to(folder)` 공개 메서드 추가 (CLI 인수 등 외부에서 폴더 이동용)
+
+#### 아이콘 크기 조정 (`ui/file_panel.py`)
+
+- 큰 아이콘: 64×64 → **128×128** (grid 100×90 → 200×180, 2배)
+- 작은 아이콘: 24×24 → **64×64** (grid 160×32 → 100×90, 이전 큰 아이콘 크기 적용)
+
+#### 기본 뷰 모드 및 설정 복원 (`ui/main_window.py`)
+
+- 최초 실행 기본값: 큰 아이콘 → **작은 아이콘**으로 변경
+- 이후 실행: `QSettings`에 저장된 마지막 선택 모드 자동 복원 (기존 로직 활용)
+
+#### 큰 아이콘 썸네일 미리보기 (`ui/file_panel.py`)
+
+- `_ThumbnailWorker(QObject)` 클래스 추가
+  - `QThread`에서 실행, `ready(int, QImage)` 시그널로 결과 전달
+  - `QImageReader.setScaledSize()` 로 읽기 단계에서 축소 → 메모리·속도 효율
+  - `.png .jpg .jpeg .bmp .gif .tif .tiff .webp .ppm .pgm .pbm .pnm` 포맷 지원
+  - `cancel()` 플래그로 폴더 이동 시 즉시 중단
+- `_start_thumbnail_loading()` / `_cancel_thumbnails()` / `_on_thumbnail_ready()` 추가
+  - 세대(generation) 카운터 `_thumb_gen` 으로 이전 스레드의 오래된 결과 자동 무시
+  - 폴더 진입 시 시스템 아이콘으로 즉시 표시 후, 썸네일 준비되는 순서대로 교체
+
+---
+
+## Release 0.8 — 2026-05-18
+
+### 8단계: GUI 리디자인 (따뜻한 크림 테마 · 커스텀 헤더 바 · 검색 필터)
+
+- `main.py` — 앱 전체 QSS 적용 (`app.setStyleSheet(_APP_QSS)`)
+  - 따뜻한 크림/베이지 팔레트: 배경 `#F5EDE0`, 툴바·상태바 `#EDE0CC`
+  - 메뉴바, 버튼(알약형), segmented control, 검색창, 트리뷰, 리스트, 스크롤바, 다이얼로그 전체 통일
+- `ui/main_window.py` — `QToolBar` → 커스텀 `QWidget` 헤더 바로 전면 교체
+  - **탐색 모드** (`_browse_bar`): 열기 버튼(좌) · 뷰 스타일 segmented control(중앙) · 검색창(우)
+  - **뷰어 모드** (`_viewer_bar`): 뒤로 버튼 + 모드별 편집·줌·회전 그룹 위젯 (separator 포함)
+  - `QAction` 키보드 단축키 → `QShortcut`으로 분리 (PyQt6.QtGui)
+  - 폴더 이동 시 검색창 자동 초기화 (`blockSignals` 사용)
+- `ui/file_browser.py` — 폴더 패널 헤더 다크 테마 → 크림 테마 (`objectName("folderHeader")`)
+- `ui/file_panel.py` — 실시간 검색 필터 추가
+  - `_filter_query: str` 인스턴스 변수 추가
+  - `set_filter(query)` 공개 메서드: 파일 이름 포함 여부로 즉시 필터링
+  - `load_folder()` 호출 시 `_filter_query` 자동 초기화
+  - `_reload()` 헬퍼로 중복 코드 통합
+
+---
+
 ## Release 0.7 — 2026-05-18
 
 ### 7단계: 안정화 (QThread 비동기 로딩 · QSettings · 최근 파일)
