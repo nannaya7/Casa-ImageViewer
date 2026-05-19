@@ -1,5 +1,54 @@
 # History
 
+## Release 0.9+ — 2026-05-19
+
+### UI 개선 (내 컴퓨터 · 미리보기 슬라이더 · 간단히 모드 · 폴더 아이콘 · 팔레트)
+
+#### 내 컴퓨터 폴더 트리 (`ui/file_browser.py`)
+
+- `QFileSystemModel` → `QStandardItemModel` 기반 커스텀 지연 로딩 트리로 전면 교체
+- 최상위 노드 "내 컴퓨터" 추가 (시스템 컴퓨터 아이콘, 선택 불가)
+  - 하위: 바탕 화면·문서·다운로드·음악·사진·동영상 (존재하는 폴더만 표시)
+  - 하위: 연결된 드라이브 전체 (`QDir.drives()`)
+- 지연 로딩: 모든 폴더 항목에 placeholder 자식 → 펼칠 때 실제 하위 폴더 로드
+- `_path_index: dict[str, QStandardItem]` 로 경로 → 트리 항목 빠른 역조회
+- `navigate_to(folder)`: 오른쪽 파일 패널에서 폴더 이동 시 트리 자동 따라가기
+  - `_path_index` 조회 → 없으면 드라이브부터 단계별 확장·로드 후 선택
+
+#### 미리보기 크기 슬라이더 (`ui/file_panel.py`)
+
+- 미리보기(큰 아이콘) 뷰 하단 우측에 수평 슬라이더 (너비 120px) 추가
+- 범위: 최소 64px(아이콘모드 크기) ~ 최대 154px(기존 대비 +20%)
+- `valueChanged` → 아이콘·그리드 크기 실시간 갱신 (grid = `size × 200/128`, `size × 180/128`)
+- `sliderReleased` → 썸네일 재로드 (드래그 중 불필요한 로딩 방지)
+- `_start_thumbnail_loading`에 `max_size` 파라미터 추가
+- `main.py` QSS: `#sliderBar` 배경·구분선 / `QSlider` groove·handle·sub-page 테마 추가
+
+#### 간단히 모드 선택 블럭 개선 (`ui/file_panel.py`)
+
+- `_CompactSelectDelegate(QStyledItemDelegate)` 추가
+  - 선택 하이라이트를 아이콘+텍스트 실제 너비에만 그림 (기존 200px 그리드 전체 채움 방지)
+  - 선택 시: (1) 둥근 하이라이트 rect → (2) 아이콘 → (3) `highlightedText` 색 텍스트 순으로 직접 그림
+  - 비선택 시: `super().paint()` 위임
+- `_list_view.setItemDelegate(_CompactSelectDelegate(...))` 적용
+- `QListView.Flow.TopToBottom + Wrapping=True + gridSize(200, 24)` 유지 → 다중 컬럼 세로 레이아웃
+
+#### 커스텀 폴더 아이콘 (`ui/folder_icons.py` 신규)
+
+- 7종 PNG 지연 로딩 (`image/folder_icon/folder_*.png`)
+- `_base_type(path)` 자동 감지: symlink→link / UNC→share / 홈→user / 즐겨찾기→favorite / 기본→default
+- `make_folder_icon(path)` → Normal.Off=유형 아이콘, Normal.On/Active.Off=open, Selected.Off=selected
+- `ui/file_panel.py` `_get_icon()`, `ui/file_browser.py` `_FolderIconModel.data()` 에서 공용 사용
+
+#### 컬러 팔레트 및 기타 (`main.py`, `ui/main_window.py`)
+
+- QSS 6색 시맨틱 팔레트 전면 적용 (Background `#F8F4EE` / Panel `#EEE8DF` / Border `#E5D7C8` / Primary `#D8A15B` / Hover `#F3E5D0` / Text `#4A382B`)
+- 뷰 레이블 재정렬: 미리보기·아이콘·간단히·자세히
+- 보기 메뉴 추가 (메뉴바)
+- `_ArrowBranchStyle` 바로가기 화살표 오버레이 크기 축소
+
+---
+
 ## Release 0.9 — 2026-05-19
 
 ### UI 개선 (파일 연결 · 폴더 트리 · 아이콘 뷰 · 썸네일)

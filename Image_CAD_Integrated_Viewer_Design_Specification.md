@@ -77,31 +77,30 @@
 ```text
 ViewerApp
  ├─ MainWindow
- │   ├─ FileBrowserPanel
- │   ├─ ToolbarManager
+ │   ├─ FileBrowserPanel       ← 내 컴퓨터 + 드라이브 트리 (QStandardItemModel, 지연 로딩)
+ │   ├─ FilePanelWidget        ← 4가지 뷰 스타일 + 썸네일 + 크기 슬라이더
+ │   ├─ CustomHeaderBar        ← 탐색/뷰어 모드 전환 (QWidget 기반)
  │   ├─ ViewerStack
  │   │   ├─ ImageViewerWidget
  │   │   ├─ Cad2DViewerWidget
  │   │   └─ Model3DViewerWidget
  │   └─ StatusBar
  │
+ ├─ ui (공용 모듈)
+ │   └─ folder_icons.py        ← 커스텀 폴더 아이콘 지연 로딩 + 유형별 매핑
+ │
  ├─ loaders
  │   ├─ image_loader.py
  │   ├─ dxf_loader.py
  │   ├─ stl_loader.py
- │   ├─ step_loader.py
- │   └─ dwg_converter.py
+ │   └─ step_loader.py
  │
  ├─ services
  │   ├─ file_type_detector.py
- │   ├─ thumbnail_service.py
- │   ├─ async_loader.py
- │   └─ settings_service.py
+ │   └─ loader_thread.py       ← QThread 범용 비동기 로더
  │
  └─ models
-     ├─ loaded_file.py
-     ├─ viewer_mode.py
-     └─ format_capability.py
+     └─ viewer_mode.py
 ```
 
 ---
@@ -231,57 +230,36 @@ QRubberBand를 사용해서 ROI를 선택하고 crop 수행하게 해줘.
 
 ## 12. 단계별 개발 마일스톤
 
-### 1단계 — 프로젝트 인프라
-목표:
-- MainWindow 생성
-- 파일 탐색기
-- QStackedWidget
-- 확장자 인식
+| 단계 | 내용 | 상태 |
+| --- | --- | --- |
+| 1단계 | 프로젝트 인프라 (MainWindow, 파일 탐색기, 뷰어 전환) | 완료 |
+| 2단계 | 이미지 뷰어 (Pillow, QGraphicsView, 줌/회전/저장) | 완료 |
+| 3단계 | 이미지 편집 (Undo, Crop, Resize) | 완료 |
+| 4단계 | DXF 뷰어 (ezdxf, QPainterPath, Zoom/Pan) | 완료 |
+| 5단계 | STL 3D 뷰어 (trimesh, QOpenGLWidget, 아크볼 회전) | 완료 |
+| 6단계 | STEP 3D 뷰어 (cadquery-ocp, STL 변환 경유) | 완료 |
+| 7단계 | 안정화 (QThread 비동기, QSettings, 최근 파일) | 완료 |
+| 8단계 | GUI 리디자인 (크림 테마, 커스텀 헤더 바, 검색 필터) | 완료 |
+| 9단계 | UI 개선 (폴더 아이콘, 뷰 스타일, 썸네일, 내 컴퓨터, 슬라이더) | 완료 |
+| 10단계 | PyInstaller 패키징 (단일 실행 파일 배포) | 예정 |
 
-### 2단계 — 이미지 뷰어
-목표:
-- 이미지 로딩
-- Zoom
-- Rotate
-- Save As
+### 9단계 주요 구현 사항
 
-### 3단계 — 이미지 편집
-목표:
-- Crop
-- Resize
-- Undo
-- 원본 보호
+#### FileBrowserPanel — 내 컴퓨터 트리
 
-### 4단계 — DXF Viewer
-목표:
-- DXF 파싱
-- 벡터 렌더링
-- Zoom/Pan
+- `QStandardItemModel` + placeholder 기반 지연 로딩
+- 최상위: 내 컴퓨터 → 특수 폴더(바탕화면·문서·다운로드·음악·사진·동영상) + 드라이브
+- `navigate_to()`: 파일 패널 폴더 이동 시 트리 자동 동기화
 
-### 5단계 — STL Viewer
-목표:
-- STL 로딩
-- OpenGL 렌더링
-- Trackball 회전
+#### FilePanelWidget — 파일 패널 개선
 
-### 6단계 — STEP 지원
-목표:
-- STEP 로딩
-- 테셀레이션
-- Mesh 렌더링
+- 미리보기 뷰 하단 크기 슬라이더 (64px ~ 154px, 드래그 중 실시간 갱신)
+- 간단히 모드: TopToBottom+Wrapping 다중 컬럼 + `_CompactSelectDelegate` 선택 블럭 최적화
 
-### 7단계 — 안정화
-목표:
-- 비동기 로딩
-- 예외 처리
-- 설정 저장
-- 최근 파일
+#### folder_icons.py — 커스텀 폴더 아이콘
 
-### 8단계 — 배포
-목표:
-- PyInstaller 패키징
-- Windows 실행 파일
-- 외부 의존성 정리
+- 7종 PNG 지연 로딩, 경로 유형별 자동 매핑
+- QIcon 상태별 다중 pixmap (Normal/Active/Selected)
 
 ---
 

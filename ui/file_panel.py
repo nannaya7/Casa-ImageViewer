@@ -3,17 +3,22 @@ from pathlib import Path
 from datetime import datetime
 
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QListWidget, QListWidgetItem,
+    QWidget, QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem,
     QTreeWidget, QTreeWidgetItem, QStackedWidget,
     QAbstractItemView, QListView, QFileIconProvider,
+    QStyledItemDelegate, QStyleOptionViewItem, QStyle, QSlider,
 )
-from PyQt6.QtCore import Qt, QSize, QFileInfo, pyqtSignal, QObject, QThread
+from PyQt6.QtCore import Qt, QSize, QRect, QFileInfo, pyqtSignal, QObject, QThread
 from PyQt6.QtGui import QImageReader, QImage, QPixmap, QIcon, QPainter
 
 from services.file_type_detector import is_supported
 from ui.folder_icons import make_folder_icon
 
 _OVERLAY_GRAB = 0.45  # bottom-left fraction to capture the shortcut arrow
+
+_LARGE_DEFAULT = 128
+_LARGE_MIN = 64
+_LARGE_MAX = int(_LARGE_DEFAULT * 1.2)  # 153
 
 _THUMB_EXTS = frozenset({
     '.png', '.jpg', '.jpeg', '.bmp', '.gif',
@@ -66,9 +71,56 @@ class ViewStyle(Enum):
 _STYLE_INDEX: dict[ViewStyle, int] = {
     ViewStyle.LARGE_ICONS: 0,
     ViewStyle.SMALL_ICONS: 1,
-    ViewStyle.LIST: 2,
+    ViewStyle.LIST:    2,
     ViewStyle.DETAILS: 3,
 }
+
+
+class _CompactSelectDelegate(QStyledItemDelegate):
+    """선택 하이라이트를 아이콘+텍스트 너비에만 맞게 그린다."""
+
+    def paint(self, painter, option, index):
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+
+        if not (opt.state & QStyle.StateFlag.State_Selected):
+            super().paint(painter, opt, index)
+            return
+
+        icon_w = opt.decorationSize.width() if opt.decorationSize.isValid() else 0
+        gap = 4 if icon_w else 0
+        text_w = opt.fontMetrics.horizontalAdvance(opt.text)
+        content_w = min(icon_w + gap + text_w + 10, opt.rect.width() - 4)
+
+        sel_rect = QRect(
+            opt.rect.left() + 2,
+            opt.rect.top() + 2,
+            content_w,
+            opt.rect.height() - 4,
+        )
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(opt.palette.highlight())
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(sel_rect, 4, 4)
+        painter.restore()
+
+        if icon_w:
+            icon_x = opt.rect.left() + 4
+            icon_y = opt.rect.top() + (opt.rect.height() - icon_w) // 2
+            opt.icon.paint(painter, QRect(icon_x, icon_y, icon_w, icon_w))
+
+        text_x = opt.rect.left() + icon_w + gap + 4
+        text_rect = QRect(text_x, opt.rect.top(), opt.rect.right() - text_x, opt.rect.height())
+        painter.save()
+        painter.setPen(opt.palette.highlightedText().color())
+        painter.drawText(
+            text_rect,
+            Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
+            opt.text,
+        )
+        painter.restore()
 
 
 def _format_size(n: int) -> str:
@@ -105,20 +157,45 @@ class FilePanelWidget(QWidget):
 
         self._large_list = self._make_list(
             QListView.ViewMode.IconMode,
-            icon_size=QSize(128, 128),
+            icon_size=QSize(_LARGE_DEFAULT, _LARGE_DEFAULT),
             grid_size=QSize(200, 180),
         )
+
+        # Container: large_list + bottom slider bar
+        large_container = QWidget()
+        lc_layout = QVBoxLayout(large_container)
+        lc_layout.setContentsMargins(0, 0, 0, 0)
+        lc_layout.setSpacing(0)
+        lc_layout.addWidget(self._large_list)
+
+        slider_bar = QWidget()
+        slider_bar.setObjectName("sliderBar")
+        slider_bar.setFixedHeight(28)
+        sb_layout = QHBoxLayout(slider_bar)
+        sb_layout.setContentsMargins(0, 4, 10, 4)
+        sb_layout.addStretch()
+        self._size_slider = QSlider(Qt.Orientation.Horizontal)
+        self._size_slider.setRange(_LARGE_MIN, _LARGE_MAX)
+        self._size_slider.setValue(_LARGE_DEFAULT)
+        self._size_slider.setFixedWidth(120)
+        self._size_slider.valueChanged.connect(self._on_size_slider_changed)
+        self._size_slider.sliderReleased.connect(self._on_size_slider_released)
+        sb_layout.addWidget(self._size_slider)
+        lc_layout.addWidget(slider_bar)
+
         self._small_list = self._make_list(
             QListView.ViewMode.IconMode,
             icon_size=QSize(64, 64),
             grid_size=QSize(100, 90),
         )
+
         self._list_view = self._make_list(
             QListView.ViewMode.ListMode,
             icon_size=QSize(20, 20),
             grid_size=QSize(200, 24),
             top_to_bottom=True,
         )
+        self._list_view.setItemDelegate(_CompactSelectDelegate(self._list_view))
 
         self._detail_tree = QTreeWidget()
         self._detail_tree.setColumnCount(4)
@@ -129,7 +206,7 @@ class FilePanelWidget(QWidget):
         self._detail_tree.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._detail_tree.itemDoubleClicked.connect(self._on_detail_double_clicked)
 
-        self._stack.addWidget(self._large_list)   # 0
+        self._stack.addWidget(large_container)    # 0
         self._stack.addWidget(self._small_list)   # 1
         self._stack.addWidget(self._list_view)    # 2
         self._stack.addWidget(self._detail_tree)  # 3
@@ -140,13 +217,14 @@ class FilePanelWidget(QWidget):
         self,
         view_mode: QListView.ViewMode,
         icon_size: QSize,
-        grid_size: QSize,
+        grid_size: QSize | None = None,
         top_to_bottom: bool = False,
     ) -> QListWidget:
         w = QListWidget()
         w.setViewMode(view_mode)
         w.setIconSize(icon_size)
-        w.setGridSize(grid_size)
+        if grid_size is not None:
+            w.setGridSize(grid_size)
         w.setResizeMode(QListView.ResizeMode.Adjust)
         w.setMovement(QListView.Movement.Static)
         w.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -178,7 +256,7 @@ class FilePanelWidget(QWidget):
         self._populate_icon_list(self._small_list, entries)
         self._populate_icon_list(self._list_view, entries)
         self._populate_details(entries)
-        self._start_thumbnail_loading(entries)
+        self._start_thumbnail_loading(entries, self._size_slider.value())
 
     def file_count(self) -> int:
         return self._large_list.count()
@@ -197,10 +275,10 @@ class FilePanelWidget(QWidget):
         self._thumb_thread = None
         self._thumb_worker = None
 
-    def _start_thumbnail_loading(self, entries: list[Path]) -> None:
+    def _start_thumbnail_loading(self, entries: list[Path], max_size: int = _LARGE_DEFAULT) -> None:
         self._cancel_thumbnails()
         gen = self._thumb_gen
-        worker = _ThumbnailWorker(entries, 128)
+        worker = _ThumbnailWorker(entries, max_size)
         thread = QThread()
         worker.moveToThread(thread)
         thread.started.connect(worker.run)
@@ -327,6 +405,17 @@ class FilePanelWidget(QWidget):
     # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
+
+    def _on_size_slider_changed(self, size: int) -> None:
+        grid_w = int(size * 200 / _LARGE_DEFAULT)
+        grid_h = int(size * 180 / _LARGE_DEFAULT)
+        self._large_list.setIconSize(QSize(size, size))
+        self._large_list.setGridSize(QSize(grid_w, grid_h))
+
+    def _on_size_slider_released(self) -> None:
+        if self._current_folder:
+            entries = self._get_entries()
+            self._start_thumbnail_loading(entries, self._size_slider.value())
 
     def _on_item_double_clicked(self, item: QListWidgetItem) -> None:
         path = item.data(Qt.ItemDataRole.UserRole)

@@ -1,4 +1,4 @@
-﻿# Image & CAD Integrated Viewer
+# Image & CAD Integrated Viewer
 
 일반 이미지 편집과 2D/3D CAD 파일 뷰잉을 통합한 Python 데스크톱 애플리케이션입니다.
 
@@ -11,7 +11,8 @@
 | 이미지 뷰어/편집 | 확대·축소, 회전, Crop, Resize, Undo, 다른 이름 저장 |
 | 2D CAD 뷰어 | DXF/DWG 파싱, 벡터 렌더링, Zoom/Pan |
 | 3D 모델 뷰어 | STL/STEP 로딩, OpenGL 렌더링, 트랙볼 회전 |
-| 파일 탐색기 | 폴더 트리, 지원 포맷 자동 필터링 |
+| 파일 탐색기 | 내 컴퓨터·드라이브 트리, 지원 포맷 자동 필터링, 실시간 검색 |
+| 파일 패널 | 미리보기·아이콘·간단히·자세히 4가지 뷰, 썸네일 비동기 로딩, 크기 슬라이더 |
 
 ---
 
@@ -45,6 +46,7 @@
 | 2D CAD 파싱 | ezdxf |
 | 3D Mesh | trimesh |
 | 3D 렌더링 | PyOpenGL |
+| STEP 파싱 | cadquery-ocp |
 
 ---
 
@@ -64,6 +66,8 @@ pip install -r requirements.txt
 
 ```bash
 python main.py
+# 또는 탐색기에서 이미지 파일과 연결하여 더블클릭으로 바로 열기
+python main.py path/to/file.png
 ```
 
 ---
@@ -72,29 +76,33 @@ python main.py
 
 ```
 PyImageViewer/
-├── main.py                      # 앱 진입점
+├── main.py                      # 앱 진입점 + 전체 QSS 테마
 ├── requirements.txt
+├── image/
+│   ├── icon/
+│   │   └── Casa-ImageViewer-ICON.png
+│   └── folder_icon/
+│       └── folder_default/link/user/favorite/share/open/selected.png
 ├── ui/
-│   ├── main_window.py           # 메인 윈도우, 레이아웃
-│   ├── file_browser.py          # 파일 탐색기 패널
+│   ├── main_window.py           # 메인 윈도우, 커스텀 헤더 바, 보기 메뉴
+│   ├── file_browser.py          # 내 컴퓨터 + 드라이브 폴더 트리 (지연 로딩)
+│   ├── file_panel.py            # 파일 목록 4종 뷰 + 썸네일 + 크기 슬라이더
+│   ├── folder_icons.py          # 커스텀 폴더 아이콘 공용 모듈
 │   ├── viewer_stack.py          # QStackedWidget 뷰어 전환
-│   ├── image_viewer.py          # 이미지 뷰어/편집 (2단계~)
-│   ├── cad2d_viewer.py          # 2D CAD 뷰어 (4단계~)
-│   └── model3d_viewer.py        # 3D 모델 뷰어 (5단계~)
+│   ├── image_viewer.py          # 이미지 뷰어/편집
+│   ├── cad_viewer.py            # 2D CAD 뷰어
+│   ├── model3d_viewer.py        # 3D 모델 뷰어 (OpenGL)
+│   └── resize_dialog.py         # 크기 조정 다이얼로그
 ├── loaders/
 │   ├── image_loader.py          # Pillow 로더
 │   ├── dxf_loader.py            # ezdxf 로더
 │   ├── stl_loader.py            # trimesh 로더
-│   ├── step_loader.py           # CadQuery 로더
-│   └── dwg_converter.py         # DWG → DXF 변환
+│   └── step_loader.py           # cadquery-ocp 로더
 ├── services/
 │   ├── file_type_detector.py    # 확장자 → ViewerMode 매핑
-│   ├── image_editor.py          # 이미지 편집 로직
-│   ├── async_loader.py          # QThread 비동기 로딩
-│   └── settings_service.py      # 앱 설정 저장
+│   └── loader_thread.py         # QThread 비동기 로더
 └── models/
-    ├── viewer_mode.py            # ViewerMode Enum
-    └── format_capability.py     # 포맷별 기능 정의
+    └── viewer_mode.py            # ViewerMode Enum
 ```
 
 ---
@@ -104,10 +112,12 @@ PyImageViewer/
 | 단계 | 목표 | 상태 |
 |---|---|---|
 | 1단계 | 프로젝트 인프라 (MainWindow, 파일 탐색기, 뷰어 전환) | 완료 |
-| 2단계 | 이미지 뷰어 (로딩, Zoom, Rotate, Save As) | 예정 |
-| 3단계 | 이미지 편집 (Crop, Resize, Undo) | 예정 |
-| 4단계 | DXF Viewer | 예정 |
-| 5단계 | STL Viewer | 예정 |
-| 6단계 | STEP 지원 | 예정 |
-| 7단계 | 안정화 (비동기, 예외 처리, 설정 저장) | 예정 |
-| 8단계 | PyInstaller 배포 | 예정 |
+| 2단계 | 이미지 뷰어 (로딩, Zoom, Rotate, Save As) | 완료 |
+| 3단계 | 이미지 편집 (Crop, Resize, Undo) | 완료 |
+| 4단계 | DXF Viewer | 완료 |
+| 5단계 | STL Viewer | 완료 |
+| 6단계 | STEP 지원 | 완료 |
+| 7단계 | 안정화 (비동기 로딩, QSettings, 최근 파일) | 완료 |
+| 8단계 | GUI 리디자인 (크림 테마, 커스텀 헤더, 검색 필터) | 완료 |
+| 9단계 | UI 개선 (폴더 아이콘, 뷰 스타일, 썸네일, 내 컴퓨터, 슬라이더) | 완료 |
+| 10단계 | PyInstaller 패키징 (단일 실행 파일 배포) | 예정 |

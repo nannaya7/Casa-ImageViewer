@@ -281,6 +281,32 @@ QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
     background: none; height: 0; width: 0;
 }
 
+/* ── Size slider (preview panel) ──────────────────────────────── */
+QWidget#sliderBar {
+    background-color: #EEE8DF;
+    border-top: 1px solid #E5D7C8;
+}
+QSlider::groove:horizontal {
+    height: 4px;
+    background: #E5D7C8;
+    border-radius: 2px;
+}
+QSlider::sub-page:horizontal {
+    background: #D8A15B;
+    border-radius: 2px;
+}
+QSlider::handle:horizontal {
+    background: #D8A15B;
+    border: none;
+    width: 14px;
+    height: 14px;
+    margin: -5px 0;
+    border-radius: 7px;
+}
+QSlider::handle:horizontal:hover {
+    background: #C48840;
+}
+
 /* ── Resize dialog spinboxes ───────────────────────────────────── */
 QSpinBox {
     background-color: #FFFDF9;
