@@ -16,6 +16,7 @@ from PyQt6.QtGui import (
 
 from ui.file_browser import COMPUTER_LOCATION, FileBrowserPanel
 from ui.folder_icons import clear_folder_icon_cache
+from ui.path_utils import format_size
 from ui.viewer_stack import ViewerStack
 from ui.file_panel import ViewStyle
 from services.file_type_detector import (
@@ -35,23 +36,6 @@ _MODE_LABEL: dict[ViewerMode, str] = {
     ViewerMode.NONE:    "",
 }
 
-def _extension_filter(exts: frozenset[str]) -> str:
-    return " ".join(f"*{ext}" for ext in sorted(exts))
-
-
-_IMAGE_FILTER = _extension_filter(IMAGE_EXTENSIONS)
-_CAD_2D_FILTER = _extension_filter(CAD_2D_EXTENSIONS)
-_MODEL_3D_FILTER = _extension_filter(MODEL_3D_EXTENSIONS)
-_SUPPORTED_FILTER = " ".join((_IMAGE_FILTER, _CAD_2D_FILTER, _MODEL_3D_FILTER))
-
-_OPEN_FILTER = (
-    f"지원 파일 ({_SUPPORTED_FILTER});;"
-    f"이미지 ({_IMAGE_FILTER});;"
-    f"2D CAD ({_CAD_2D_FILTER});;"
-    f"3D 모델 ({_MODEL_3D_FILTER});;"
-    "모든 파일 (*.*)"
-)
-
 _VIEW_STYLES: list[tuple[ViewStyle, str]] = [
     (ViewStyle.LARGE_ICONS, "미리보기"),
     (ViewStyle.SMALL_ICONS, "아이콘"),
@@ -69,6 +53,61 @@ _IDX_TO_STYLE: dict[int, ViewStyle] = {v: k for k, v in _STYLE_TO_IDX.items()}
 
 _WINDOW_ICON = Path(__file__).parent.parent / "image" / "icon" / "Casa-ImageViewer-ICON.png"
 _ABOUT_IMAGE = Path(__file__).parent.parent / "image" / "About_This_APP.png"
+
+_LICENSE_HTML = """
+<html>
+<head>
+<style>
+    body { font-family: "Segoe UI", "Malgun Gothic", sans-serif; color: #4A382B;
+           background: #FFFDF9; line-height: 1.45; }
+    h2 { margin: 0 0 10px 0; color: #3A281E; }
+    p { margin: 4px 0 14px 0; color: #7A6050; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border-bottom: 1px solid #E5D7C8; padding: 8px 6px;
+             text-align: left; vertical-align: top; }
+    th { background: #EEE8DF; color: #3A281E; }
+    a { color: #8A5A24; text-decoration: none; }
+</style>
+</head>
+<body>
+<h2>사용된 오픈소스 라이브러리</h2>
+<p>아래 정보는 프로젝트에서 직접 사용하는 주요 패키지 기준입니다. 각 패키지의 세부
+의존성은 배포판에 포함된 메타데이터와 원 프로젝트 라이선스를 따릅니다.</p>
+<table>
+    <tr><th>라이브러리</th><th>용도</th><th>라이선스</th></tr>
+    <tr><td>PyQt6</td><td>GUI 프레임워크</td><td>GPL v3 또는 상용 라이선스</td></tr>
+    <tr><td>Pillow</td><td>이미지 로딩/처리</td><td>HPND</td></tr>
+    <tr><td>pillow-heif</td><td>HEIC/HEIF/AVIF 이미지 로딩</td><td>BSD-3-Clause</td></tr>
+    <tr><td>rawpy</td><td>RAW 이미지 현상</td><td>MIT</td></tr>
+    <tr><td>pypdfium2</td><td>PDF 페이지 렌더링</td><td>BSD-3-Clause, Apache-2.0 및 PDFium 관련 라이선스</td></tr>
+    <tr><td>ezdxf</td><td>DXF 파싱 및 DWG 변환 연동</td><td>MIT</td></tr>
+    <tr><td>trimesh</td><td>STL/메시 데이터 처리</td><td>MIT</td></tr>
+    <tr><td>PyOpenGL</td><td>3D OpenGL 렌더링</td><td>BSD</td></tr>
+    <tr><td>cadquery / cadquery-ocp / OCP</td><td>STEP 파일 로딩 및 테셀레이션</td><td>Apache-2.0 및 OCP 관련 라이선스</td></tr>
+    <tr><td>numpy</td><td>수치 계산 및 메시 배열 처리</td><td>BSD-3-Clause</td></tr>
+    <tr><td>ODA File Converter</td><td>DWG → DXF 변환</td><td>Open Design Alliance 배포 조건 적용, 별도 설치 필요</td></tr>
+</table>
+</body>
+</html>
+"""
+
+
+def _extension_filter(exts: frozenset[str]) -> str:
+    return " ".join(f"*{ext}" for ext in sorted(exts))
+
+
+_IMAGE_FILTER = _extension_filter(IMAGE_EXTENSIONS)
+_CAD_2D_FILTER = _extension_filter(CAD_2D_EXTENSIONS)
+_MODEL_3D_FILTER = _extension_filter(MODEL_3D_EXTENSIONS)
+_SUPPORTED_FILTER = " ".join((_IMAGE_FILTER, _CAD_2D_FILTER, _MODEL_3D_FILTER))
+
+_OPEN_FILTER = (
+    f"지원 파일 ({_SUPPORTED_FILTER});;"
+    f"이미지 ({_IMAGE_FILTER});;"
+    f"2D CAD ({_CAD_2D_FILTER});;"
+    f"3D 모델 ({_MODEL_3D_FILTER});;"
+    "모든 파일 (*.*)"
+)
 
 
 class MainWindow(QMainWindow):
@@ -148,8 +187,13 @@ class MainWindow(QMainWindow):
         outer = QHBoxLayout(container)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
+        outer.addWidget(self._build_browse_bar())
+        outer.addWidget(self._build_viewer_bar())
 
-        # ── Browse-mode bar ───────────────────────────────────────────
+        self._viewer_bar.setVisible(False)
+        return container
+
+    def _build_browse_bar(self) -> QWidget:
         self._browse_bar = QWidget()
         self._browse_bar.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
@@ -160,16 +204,11 @@ class MainWindow(QMainWindow):
 
         btn_open = QPushButton("  열기")
         btn_open.setObjectName("btnOpen")
-        btn_open.setIcon(
-            self.style().standardIcon(
-                self.style().StandardPixmap.SP_DirOpenIcon
-            )
-        )
+        btn_open.setIcon(self.style().standardIcon(self.style().StandardPixmap.SP_DirOpenIcon))
         btn_open.setIconSize(QSize(18, 18))
         btn_open.setFixedHeight(34)
         btn_open.clicked.connect(self._open_file_dialog)
         bl.addWidget(btn_open)
-
         bl.addStretch(1)
 
         seg_frame = QFrame()
@@ -195,7 +234,6 @@ class MainWindow(QMainWindow):
 
         self._style_buttons[ViewStyle.SMALL_ICONS].setChecked(True)
         bl.addWidget(seg_frame)
-
         bl.addStretch(1)
 
         self._search_box = QLineEdit()
@@ -205,7 +243,9 @@ class MainWindow(QMainWindow):
         self._search_box.textChanged.connect(self._on_search)
         bl.addWidget(self._search_box)
 
-        # ── Viewer-mode bar ───────────────────────────────────────────
+        return self._browse_bar
+
+    def _build_viewer_bar(self) -> QWidget:
         self._viewer_bar = QWidget()
         self._viewer_bar.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
@@ -220,7 +260,7 @@ class MainWindow(QMainWindow):
         self._btn_back.clicked.connect(self._go_back)
         vl.addWidget(self._btn_back)
 
-        # Image-only group (sep + edit controls)
+        # Image-only controls
         self._image_grp = QWidget()
         ig = QHBoxLayout(self._image_grp)
         ig.setContentsMargins(0, 0, 0, 0)
@@ -237,10 +277,9 @@ class MainWindow(QMainWindow):
         btn_resize.setFixedHeight(34)
         btn_resize.clicked.connect(lambda: self._viewer_stack.image_viewer.open_resize_dialog())
         ig.addWidget(btn_resize)
-
         vl.addWidget(self._image_grp)
 
-        # Common zoom group (sep + zoom controls)
+        # Zoom controls (image + CAD + 3D)
         self._zoom_grp = QWidget()
         zg = QHBoxLayout(self._zoom_grp)
         zg.setContentsMargins(0, 0, 0, 0)
@@ -252,10 +291,9 @@ class MainWindow(QMainWindow):
             b.setFixedHeight(34)
             b.clicked.connect(slot)
             zg.addWidget(b)
-
         vl.addWidget(self._zoom_grp)
 
-        # Rotate/save group (sep + rotate + save)
+        # Rotate / save controls (image only)
         self._rot_grp = QWidget()
         rg = QHBoxLayout(self._rot_grp)
         rg.setContentsMargins(0, 0, 0, 0)
@@ -282,15 +320,10 @@ class MainWindow(QMainWindow):
         btn_save.setFixedHeight(34)
         btn_save.clicked.connect(lambda: self._viewer_stack.image_viewer.save_as())
         rg.addWidget(btn_save)
-
         vl.addWidget(self._rot_grp)
+
         vl.addStretch(1)
-
-        outer.addWidget(self._browse_bar)
-        outer.addWidget(self._viewer_bar)
-
-        self._viewer_bar.setVisible(False)
-        return container
+        return self._viewer_bar
 
     def _setup_menubar(self) -> None:
         mb = self.menuBar()
@@ -301,12 +334,10 @@ class MainWindow(QMainWindow):
         open_act.setShortcut("Ctrl+O")
         open_act.triggered.connect(self._open_file_dialog)
         file_menu.addAction(open_act)
-
         file_menu.addSeparator()
 
         self._recent_menu = QMenu("최근 파일(&R)", self)
         file_menu.addMenu(self._recent_menu)
-
         file_menu.addSeparator()
 
         quit_act = QAction("종료(&X)", self)
@@ -372,9 +403,7 @@ class MainWindow(QMainWindow):
             self.restoreState(state)
 
         style_idx = _settings_int(
-            self._settings,
-            "viewStyle",
-            _STYLE_TO_IDX[ViewStyle.SMALL_ICONS],
+            self._settings, "viewStyle", _STYLE_TO_IDX[ViewStyle.SMALL_ICONS]
         )
         style = _IDX_TO_STYLE.get(style_idx, ViewStyle.SMALL_ICONS)
         self._viewer_stack.file_panel.set_view_style(style)
@@ -405,10 +434,7 @@ class MainWindow(QMainWindow):
             ViewStyle.LARGE_ICONS,
         )
         self._settings.setValue("viewStyle", _STYLE_TO_IDX[style])
-        self._settings.setValue(
-            "thumbnailSize",
-            self._viewer_stack.file_panel.thumbnail_size(),
-        )
+        self._settings.setValue("thumbnailSize", self._viewer_stack.file_panel.thumbnail_size())
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._cancel_loading(wait=True)
@@ -512,8 +538,7 @@ class MainWindow(QMainWindow):
         self._set_loading(False)
         if self._current_file:
             path = Path(self._current_file)
-            size_text = _safe_file_size(path)
-            self._status_info.setText(f"  {path.name}    {size_text}")
+            self._status_info.setText(f"  {path.name}    {_safe_file_size(path)}")
         self._status_mode.setText(_MODE_LABEL.get(mode, ""))
 
     def _on_load_error(self, gen: int, msg: str) -> None:
@@ -569,18 +594,13 @@ class MainWindow(QMainWindow):
         loader_fn = self._get_loader(mode, path.suffix.lower())
         if loader_fn is None:
             self._viewer_stack.switch_to(mode)
-            self._set_back_only_mode()
+            self._set_viewer_mode(ViewerMode.NONE)
             self._status_info.setText(f"  {path.name}    {_safe_file_size(path)}")
             self._status_mode.setText("")
             return
 
         self._viewer_stack.switch_to(mode)
-        if mode == ViewerMode.IMAGE:
-            self._set_image_mode()
-        elif mode == ViewerMode.CAD_2D:
-            self._set_cad_mode()
-        elif mode == ViewerMode.MODEL_3D:
-            self._set_3d_mode()
+        self._set_viewer_mode(mode)
 
         self._set_loading(True)
         self._status_info.setText(f"  {path.name}    {_safe_file_size(path)}")
@@ -609,11 +629,7 @@ class MainWindow(QMainWindow):
 
     def _show_about_dialog(self) -> None:
         if not _ABOUT_IMAGE.exists():
-            QMessageBox.warning(
-                self,
-                "이 앱에 관하여",
-                f"이미지를 찾을 수 없습니다:\n{_ABOUT_IMAGE}",
-            )
+            QMessageBox.warning(self, "이 앱에 관하여", f"이미지를 찾을 수 없습니다:\n{_ABOUT_IMAGE}")
             return
 
         pixmap = QPixmap(str(_ABOUT_IMAGE))
@@ -643,7 +659,6 @@ class MainWindow(QMainWindow):
         top_bar = QHBoxLayout()
         top_bar.setContentsMargins(0, 0, 0, 0)
         top_bar.addStretch(1)
-
         close_button = QPushButton("X")
         close_button.setFixedSize(30, 30)
         close_button.setToolTip("닫기")
@@ -680,10 +695,8 @@ class MainWindow(QMainWindow):
         scale_x = display_pixmap.width() / pixmap.width()
         scale_y = display_pixmap.height() / pixmap.height()
         license_button.setGeometry(
-            int(46 * scale_x),
-            int(1304 * scale_y),
-            int(868 * scale_x),
-            int(172 * scale_y),
+            int(46 * scale_x), int(1304 * scale_y),
+            int(868 * scale_x), int(172 * scale_y),
         )
         license_button.raise_()
 
@@ -715,7 +728,6 @@ class MainWindow(QMainWindow):
         title.setObjectName("dialogTitle")
         top_bar.addWidget(title)
         top_bar.addStretch(1)
-
         close_button = QPushButton("X")
         close_button.setFixedSize(30, 30)
         close_button.setToolTip("닫기")
@@ -725,7 +737,7 @@ class MainWindow(QMainWindow):
 
         browser = QTextBrowser()
         browser.setOpenExternalLinks(True)
-        browser.setHtml(_open_source_license_html())
+        browser.setHtml(_LICENSE_HTML)
         layout.addWidget(browser)
 
         dialog.resize(720, 560)
@@ -742,7 +754,6 @@ class MainWindow(QMainWindow):
 
     def _go_back(self) -> None:
         self._cancel_loading()
-        self._current_mode = ViewerMode.NONE
         self._viewer_stack.show_browser()
         self._set_browse_mode()
         folder = self._viewer_stack.file_panel._current_folder
@@ -788,42 +799,20 @@ class MainWindow(QMainWindow):
         self._browse_bar.setVisible(True)
         self._viewer_bar.setVisible(False)
 
-    def _set_image_mode(self) -> None:
-        self._ensure_image_viewer_signals()
-        self._current_mode = ViewerMode.IMAGE
+    def _set_viewer_mode(self, mode: ViewerMode) -> None:
+        """Show viewer header. ViewerMode.NONE = back button only (no viewer controls)."""
+        self._current_mode = mode
         self._browse_bar.setVisible(False)
         self._viewer_bar.setVisible(True)
-        self._image_grp.setVisible(True)
-        self._zoom_grp.setVisible(True)
-        self._rot_grp.setVisible(True)
-
-    def _set_cad_mode(self) -> None:
-        self._current_mode = ViewerMode.CAD_2D
-        self._browse_bar.setVisible(False)
-        self._viewer_bar.setVisible(True)
-        self._image_grp.setVisible(False)
-        self._zoom_grp.setVisible(True)
-        self._rot_grp.setVisible(False)
-
-    def _set_3d_mode(self) -> None:
-        self._current_mode = ViewerMode.MODEL_3D
-        self._browse_bar.setVisible(False)
-        self._viewer_bar.setVisible(True)
-        self._image_grp.setVisible(False)
-        self._zoom_grp.setVisible(True)
-        self._rot_grp.setVisible(False)
-
-    def _set_back_only_mode(self) -> None:
-        self._current_mode = ViewerMode.NONE
-        self._browse_bar.setVisible(False)
-        self._viewer_bar.setVisible(True)
-        self._image_grp.setVisible(False)
-        self._zoom_grp.setVisible(False)
-        self._rot_grp.setVisible(False)
+        self._image_grp.setVisible(mode == ViewerMode.IMAGE)
+        self._zoom_grp.setVisible(mode != ViewerMode.NONE)
+        self._rot_grp.setVisible(mode == ViewerMode.IMAGE)
+        if mode == ViewerMode.IMAGE:
+            self._ensure_image_viewer_signals()
 
 
 # ------------------------------------------------------------------
-# Helpers
+# Module-level helpers
 # ------------------------------------------------------------------
 
 def _make_vsep() -> QWidget:
@@ -842,11 +831,7 @@ def _make_rotate_icon(clockwise: bool) -> QIcon:
     pixmap = QPixmap(size, size)
     pixmap.fill(Qt.GlobalColor.transparent)
 
-    if clockwise:
-        degrees = range(220, -70, -10)
-    else:
-        degrees = range(-40, 250, 10)
-
+    degrees = range(220, -70, -10) if clockwise else range(-40, 250, 10)
     points = [
         QPointF(
             center.x() + radius * math.cos(math.radians(deg)),
@@ -886,77 +871,9 @@ def _make_rotate_icon(clockwise: bool) -> QIcon:
     return QIcon(pixmap)
 
 
-def _open_source_license_html() -> str:
-    return """
-    <html>
-    <head>
-    <style>
-        body {
-            font-family: "Segoe UI", "Malgun Gothic", sans-serif;
-            color: #4A382B;
-            background: #FFFDF9;
-            line-height: 1.45;
-        }
-        h2 {
-            margin: 0 0 10px 0;
-            color: #3A281E;
-        }
-        p {
-            margin: 4px 0 14px 0;
-            color: #7A6050;
-        }
-        table {
-            border-collapse: collapse;
-            width: 100%;
-        }
-        th, td {
-            border-bottom: 1px solid #E5D7C8;
-            padding: 8px 6px;
-            text-align: left;
-            vertical-align: top;
-        }
-        th {
-            background: #EEE8DF;
-            color: #3A281E;
-        }
-        a {
-            color: #8A5A24;
-            text-decoration: none;
-        }
-    </style>
-    </head>
-    <body>
-    <h2>사용된 오픈소스 라이브러리</h2>
-    <p>아래 정보는 프로젝트에서 직접 사용하는 주요 패키지 기준입니다. 각 패키지의 세부 의존성은 배포판에 포함된 메타데이터와 원 프로젝트 라이선스를 따릅니다.</p>
-    <table>
-        <tr><th>라이브러리</th><th>용도</th><th>라이선스</th></tr>
-        <tr><td>PyQt6</td><td>GUI 프레임워크</td><td>GPL v3 또는 상용 라이선스</td></tr>
-        <tr><td>Pillow</td><td>이미지 로딩/처리</td><td>HPND</td></tr>
-        <tr><td>pillow-heif</td><td>HEIC/HEIF/AVIF 이미지 로딩</td><td>BSD-3-Clause</td></tr>
-        <tr><td>rawpy</td><td>RAW 이미지 현상</td><td>MIT</td></tr>
-        <tr><td>pypdfium2</td><td>PDF 페이지 렌더링</td><td>BSD-3-Clause, Apache-2.0 및 PDFium 관련 라이선스</td></tr>
-        <tr><td>ezdxf</td><td>DXF 파싱 및 DWG 변환 연동</td><td>MIT</td></tr>
-        <tr><td>trimesh</td><td>STL/메시 데이터 처리</td><td>MIT</td></tr>
-        <tr><td>PyOpenGL</td><td>3D OpenGL 렌더링</td><td>BSD</td></tr>
-        <tr><td>cadquery / cadquery-ocp / OCP</td><td>STEP 파일 로딩 및 테셀레이션</td><td>Apache-2.0 및 OCP 관련 라이선스</td></tr>
-        <tr><td>numpy</td><td>수치 계산 및 메시 배열 처리</td><td>BSD-3-Clause</td></tr>
-        <tr><td>ODA File Converter</td><td>DWG → DXF 변환</td><td>Open Design Alliance 배포 조건 적용, 별도 설치 필요</td></tr>
-    </table>
-    </body>
-    </html>
-    """
-
-
-def _format_size(n: int) -> str:
-    for unit, threshold in (("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)):
-        if n >= threshold:
-            return f"{n / threshold:.1f} {unit}"
-    return f"{n} B"
-
-
 def _safe_file_size(path: Path) -> str:
     try:
-        return _format_size(path.stat().st_size)
+        return format_size(path.stat().st_size)
     except OSError:
         return "크기 알 수 없음"
 

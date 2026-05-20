@@ -14,6 +14,19 @@ IMAGE_EXTENSIONS = frozenset({
     '.heic', '.heif', '.avif', '.svg', '.raw', '.psd', '.pdf',
 })
 
+# Subset of IMAGE_EXTENSIONS that QImageReader can decode natively (for thumbnails)
+THUMBNAIL_EXTENSIONS = frozenset({
+    '.png', '.jpg', '.jpeg', '.bmp', '.gif',
+    '.tif', '.tiff', '.webp',
+    '.ppm', '.pgm', '.pbm', '.pnm',
+    '.jfif', '.jpe',
+    '.jp2', '.j2k', '.jpc', '.jpf', '.jpx',
+    '.apng', '.cur', '.icns', '.pcx', '.qoi', '.xbm', '.xpm',
+    '.icb', '.vda', '.vst',
+    '.sgi', '.rgb', '.rgba', '.bw',
+    '.ras', '.mpo',
+})
+
 CAD_2D_EXTENSIONS = frozenset({'.dxf', '.dwg'})
 
 MODEL_3D_EXTENSIONS = frozenset({'.stl', '.step', '.stp'})

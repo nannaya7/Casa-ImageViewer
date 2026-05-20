@@ -15,39 +15,49 @@ from PyQt6.QtCore import (
     QUrl, QFile, QProcess, QDir,
 )
 from PyQt6.QtGui import (
-    QImageReader, QImage, QPixmap, QIcon, QPainter, QDesktopServices,
+    QImageReader, QImage, QPixmap, QIcon, QPainter, QPen, QColor, QDesktopServices,
 )
 
-from services.file_type_detector import is_supported
+from services.file_type_detector import THUMBNAIL_EXTENSIONS, is_supported
 from ui.file_browser import COMPUTER_LOCATION
 from ui.folder_icons import make_folder_icon
+from ui.path_utils import SPECIAL_FOLDERS, entry_display_name, is_drive_root, format_size
 
-_OVERLAY_GRAB = 0.45  # bottom-left fraction to capture the shortcut arrow
+_OVERLAY_GRAB = 0.45
 
 _LARGE_DEFAULT = 128
 _LARGE_MIN = 64
 _LARGE_MAX = int(_LARGE_DEFAULT * 1.2)  # 153
+_LARGE_GRID_W = 200
+_LARGE_GRID_H = 180
 
-_THUMB_EXTS = frozenset({
-    '.png', '.jpg', '.jpeg', '.bmp', '.gif',
-    '.tif', '.tiff', '.webp',
-    '.ppm', '.pgm', '.pbm', '.pnm',
-    '.jfif', '.jpe',
-    '.jp2', '.j2k', '.jpc', '.jpf', '.jpx',
-    '.apng', '.cur', '.icns', '.pcx', '.qoi', '.xbm', '.xpm',
-    '.icb', '.vda', '.vst',
-    '.sgi', '.rgb', '.rgba', '.bw',
-    '.ras', '.mpo',
-})
+_THUMB_PLACEHOLDER: QIcon | None = None
 
-_SPECIAL_FOLDERS = [
-    ("바탕 화면", "Desktop"),
-    ("문서",     "Documents"),
-    ("다운로드", "Downloads"),
-    ("음악",     "Music"),
-    ("사진",     "Pictures"),
-    ("동영상",   "Videos"),
-]
+
+def _thumb_placeholder_icon() -> QIcon:
+    """Warm-cream image-frame placeholder shown while a thumbnail loads."""
+    global _THUMB_PLACEHOLDER
+    if _THUMB_PLACEHOLDER is not None:
+        return _THUMB_PLACEHOLDER
+
+    size = _LARGE_MAX
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(QPen(QColor("#CBBFB3"), 1.0))
+    p.setBrush(QColor("#EDE8E2"))
+    p.drawRoundedRect(2, 2, size - 4, size - 4, 6, 6)
+    mid = size // 2
+    s = size // 4
+    p.setPen(QPen(QColor("#A89888"), 1.5))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    p.drawRoundedRect(mid - s, mid - s, s * 2, s * 2, 3, 3)
+    r = s // 3
+    p.drawEllipse(mid - s + r, mid - s + r, r * 2, r * 2)
+    p.end()
+    _THUMB_PLACEHOLDER = QIcon(pm)
+    return _THUMB_PLACEHOLDER
 
 
 class _ThumbnailWorker(QObject):
@@ -67,7 +77,7 @@ class _ThumbnailWorker(QObject):
         for idx, path in enumerate(self._entries):
             if self._cancelled:
                 break
-            if not (path.is_file() and path.suffix.lower() in _THUMB_EXTS):
+            if not (path.is_file() and path.suffix.lower() in THUMBNAIL_EXTENSIONS):
                 continue
             reader = QImageReader(str(path))
             reader.setAutoTransform(True)
@@ -146,33 +156,15 @@ class _CompactSelectDelegate(QStyledItemDelegate):
         painter.restore()
 
 
-def _format_size(n: int) -> str:
-    for unit, threshold in (("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)):
-        if n >= threshold:
-            return f"{n / threshold:.1f} {unit}"
-    return f"{n} B"
-
-
 def _computer_entries() -> list[Path]:
     home = Path.home()
     entries: list[Path] = []
-    for _, sub in _SPECIAL_FOLDERS:
+    for _, sub in SPECIAL_FOLDERS:
         path = home / sub
         if path.is_dir():
             entries.append(path)
     entries.extend(Path(fi.absolutePath()) for fi in QDir.drives())
     return entries
-
-
-def _entry_display_name(path: Path) -> str:
-    drive = path.drive.rstrip(":\\/")
-    if drive and not path.name:
-        return f"{drive} 드라이브"
-    return path.name or str(path)
-
-
-def _is_drive_root(path: Path) -> bool:
-    return bool(path.drive) and path.parent == path
 
 
 class FilePanelWidget(QWidget):
@@ -206,10 +198,9 @@ class FilePanelWidget(QWidget):
         self._large_list = self._make_list(
             QListView.ViewMode.IconMode,
             icon_size=QSize(_LARGE_DEFAULT, _LARGE_DEFAULT),
-            grid_size=QSize(200, 180),
+            grid_size=QSize(_LARGE_GRID_W, _LARGE_GRID_H),
         )
 
-        # Container: large_list + bottom slider bar
         large_container = QWidget()
         lc_layout = QVBoxLayout(large_container)
         lc_layout.setContentsMargins(0, 0, 0, 0)
@@ -256,10 +247,10 @@ class FilePanelWidget(QWidget):
         self._detail_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._detail_tree.customContextMenuRequested.connect(self._show_detail_context_menu)
 
-        self._stack.addWidget(large_container)    # 0
-        self._stack.addWidget(self._small_list)   # 1
-        self._stack.addWidget(self._list_view)    # 2
-        self._stack.addWidget(self._detail_tree)  # 3
+        self._stack.addWidget(large_container)   # 0
+        self._stack.addWidget(self._small_list)  # 1
+        self._stack.addWidget(self._list_view)   # 2
+        self._stack.addWidget(self._detail_tree) # 3
 
         layout.addWidget(self._stack)
 
@@ -312,11 +303,6 @@ class FilePanelWidget(QWidget):
         self._filter_query = query.strip().lower()
         self._reload()
 
-    def _reload(self) -> None:
-        entries = self._get_entries()
-        self._last_entries = entries
-        self._populate_current_view(entries)
-
     def file_count(self) -> int:
         return len(self._last_entries)
 
@@ -324,11 +310,16 @@ class FilePanelWidget(QWidget):
     # Internals
     # ------------------------------------------------------------------
 
+    def _reload(self) -> None:
+        entries = self._get_entries()
+        self._last_entries = entries
+        self._populate_current_view(entries)
+
     def _populate_current_view(self, entries: list[Path]) -> None:
         current = self._stack.currentIndex()
         if current == _STYLE_INDEX[ViewStyle.LARGE_ICONS]:
-            self._populate_icon_list(self._large_list, entries)
             self._start_thumbnail_loading(entries, self._size_slider.value())
+            self._populate_icon_list(self._large_list, entries)
         elif current == _STYLE_INDEX[ViewStyle.SMALL_ICONS]:
             self._cancel_thumbnails()
             self._populate_icon_list(self._small_list, entries)
@@ -354,7 +345,7 @@ class FilePanelWidget(QWidget):
 
     def _start_thumbnail_loading(self, entries: list[Path], max_size: int = _LARGE_DEFAULT) -> None:
         self._cancel_thumbnails()
-        if not any(p.is_file() and p.suffix.lower() in _THUMB_EXTS for p in entries):
+        if not any(p.is_file() and p.suffix.lower() in THUMBNAIL_EXTENSIONS for p in entries):
             return
         gen = self._thumb_gen
         worker = _ThumbnailWorker(entries, max_size)
@@ -413,15 +404,24 @@ class FilePanelWidget(QWidget):
 
     def _get_icon(self, path: Path) -> QIcon:
         if path.is_dir():
-            return make_folder_icon(path)
+            folder_icon = make_folder_icon(path)
+            fi = QFileInfo(str(path))
+            if fi.isSymLink():
+                sys_icon = self._icon_provider.icon(fi)
+                return self._resize_shortcut_overlay(path, sys_icon, folder_icon)
+            return folder_icon
         icon = self._icon_provider.icon(QFileInfo(str(path)))
         if path.is_symlink() or path.suffix.lower() == '.lnk':
             icon = self._resize_shortcut_overlay(path, icon)
         return icon
 
-    def _resize_shortcut_overlay(self, path: Path, full_icon: QIcon) -> QIcon:
+    def _resize_shortcut_overlay(
+        self, path: Path, full_icon: QIcon, base_override: QIcon | None = None
+    ) -> QIcon:
         try:
-            if path.is_symlink():
+            if base_override is not None:
+                base_icon = base_override
+            elif path.is_symlink():
                 base_icon = self._icon_provider.icon(QFileInfo(str(path.resolve(strict=False))))
             elif path.is_dir():
                 base_icon = self._icon_provider.icon(QFileIconProvider.IconType.Folder)
@@ -458,14 +458,19 @@ class FilePanelWidget(QWidget):
 
     def _populate_icon_list(self, widget: QListWidget, entries: list[Path]) -> None:
         widget.clear()
+        is_large = (widget is self._large_list)
         parent = (
             Path(self._current_folder).parent
             if self._current_folder and self._current_folder != COMPUTER_LOCATION
             else None
         )
         for entry in entries:
-            label = ".." if (parent and entry == parent) else _entry_display_name(entry)
-            item = QListWidgetItem(self._get_icon(entry), label)
+            label = ".." if (parent and entry == parent) else entry_display_name(entry)
+            if is_large and entry.is_file() and entry.suffix.lower() in THUMBNAIL_EXTENSIONS:
+                icon = _thumb_placeholder_icon()
+            else:
+                icon = self._get_icon(entry)
+            item = QListWidgetItem(icon, label)
             item.setData(Qt.ItemDataRole.UserRole, str(entry))
             widget.addItem(item)
 
@@ -483,13 +488,13 @@ class FilePanelWidget(QWidget):
             except OSError:
                 stat = None
                 modified = ""
-            display_name = ".." if (parent and entry == parent) else _entry_display_name(entry)
+            display_name = ".." if (parent and entry == parent) else entry_display_name(entry)
             if entry.is_dir():
                 row = QTreeWidgetItem([display_name, "", "폴더", modified])
             else:
                 row = QTreeWidgetItem([
                     display_name,
-                    _format_size(stat.st_size) if stat else "",
+                    format_size(stat.st_size) if stat else "",
                     entry.suffix.lower(),
                     modified,
                 ])
@@ -510,10 +515,9 @@ class FilePanelWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _on_size_slider_changed(self, size: int) -> None:
-        grid_w = int(size * 200 / _LARGE_DEFAULT)
-        grid_h = int(size * 180 / _LARGE_DEFAULT)
+        scale = size / _LARGE_DEFAULT
         self._large_list.setIconSize(QSize(size, size))
-        self._large_list.setGridSize(QSize(grid_w, grid_h))
+        self._large_list.setGridSize(QSize(int(_LARGE_GRID_W * scale), int(_LARGE_GRID_H * scale)))
 
     def _on_size_slider_released(self) -> None:
         self.thumbnail_size_changed.emit(self._size_slider.value())
@@ -553,7 +557,7 @@ class FilePanelWidget(QWidget):
         if path:
             p = Path(path)
             is_up_entry = self._is_up_entry(p)
-            is_drive_root = _is_drive_root(p)
+            is_root = is_drive_root(p)
 
             open_act = menu.addAction("열기")
             open_default_act = menu.addAction("기본 앱으로 열기")
@@ -565,8 +569,8 @@ class FilePanelWidget(QWidget):
             copy_path_act = menu.addAction("경로 복사")
             menu.addSeparator()
 
-            rename_act.setEnabled(not is_up_entry and not is_drive_root)
-            trash_act.setEnabled(not is_up_entry and not is_drive_root)
+            rename_act.setEnabled(not is_up_entry and not is_root)
+            trash_act.setEnabled(not is_up_entry and not is_root)
 
             open_act.triggered.connect(lambda checked=False, target=path: self._open_path(target))
             open_default_act.triggered.connect(
@@ -619,10 +623,7 @@ class FilePanelWidget(QWidget):
             return
 
         new_name, ok = QInputDialog.getText(
-            self,
-            "이름 바꾸기",
-            "새 이름:",
-            text=path.name,
+            self, "이름 바꾸기", "새 이름:", text=path.name,
         )
         new_name = new_name.strip()
         if not ok or not new_name or new_name == path.name:

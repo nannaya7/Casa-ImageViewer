@@ -7,18 +7,10 @@ from PyQt6.QtCore import QDir, Qt, QLineF, pyqtSignal
 from PyQt6.QtGui import QPainter, QPen, QColor, QStandardItemModel, QStandardItem
 
 from ui.folder_icons import make_folder_icon
+from ui.path_utils import SPECIAL_FOLDERS, entry_display_name
 
 _SENTINEL = "__loading__"
 COMPUTER_LOCATION = "__computer__"
-
-_SPECIAL_FOLDERS = [
-    ("바탕 화면", "Desktop"),
-    ("문서",     "Documents"),
-    ("다운로드", "Downloads"),
-    ("음악",     "Music"),
-    ("사진",     "Pictures"),
-    ("동영상",   "Videos"),
-]
 
 
 class _ArrowBranchStyle(QProxyStyle):
@@ -92,7 +84,7 @@ class FileBrowserPanel(QWidget):
         layout.addWidget(self._tree)
 
         self._build_root()
-        self._tree.expand(self._model.index(0, 0))  # expand 내 컴퓨터
+        self._tree.expand(self._model.index(0, 0))
 
     def _build_root(self) -> None:
         provider = QFileIconProvider()
@@ -105,14 +97,14 @@ class FileBrowserPanel(QWidget):
         self._path_index[COMPUTER_LOCATION] = pc_item
 
         home = Path.home()
-        for display, sub in _SPECIAL_FOLDERS:
+        for display, sub in SPECIAL_FOLDERS:
             path = home / sub
             if path.is_dir():
                 pc_item.appendRow(self._make_item(display, path))
 
         for fi in QDir.drives():
             path = Path(fi.absolutePath())
-            pc_item.appendRow(self._make_item(_drive_display_name(path), path))
+            pc_item.appendRow(self._make_item(entry_display_name(path), path))
 
         self._model.appendRow(pc_item)
 
@@ -127,7 +119,6 @@ class FileBrowserPanel(QWidget):
         item.setData(path_str, Qt.ItemDataRole.UserRole)
         item.setIcon(make_folder_icon(path))
         self._path_index[path_str] = item
-        # Placeholder child so the expand arrow appears
         ph = QStandardItem("")
         ph.setData(_SENTINEL, Qt.ItemDataRole.UserRole)
         item.appendRow(ph)
@@ -146,7 +137,6 @@ class FileBrowserPanel(QWidget):
             item.appendRow(self._make_item(sub.name, sub))
 
     def _ensure_populated(self, item: QStandardItem) -> None:
-        """Replace placeholder with real children if not yet loaded."""
         if item.rowCount() == 1:
             child = item.child(0)
             if child and child.data(Qt.ItemDataRole.UserRole) == _SENTINEL:
@@ -168,17 +158,15 @@ class FileBrowserPanel(QWidget):
             self._select_item(self._path_index[target_str])
             return
 
-        # Walk up until we find a known ancestor
         chain: list[Path] = []
         p = target
         while str(p) not in self._path_index:
             chain.append(p)
             parent = p.parent
             if parent == p:
-                return  # unreachable from current tree
+                return
             p = parent
 
-        # Expand ancestor chain downward, triggering lazy loading
         chain.reverse()
         ancestor = self._path_index[str(p)]
         for next_path in chain:
@@ -219,10 +207,3 @@ class FileBrowserPanel(QWidget):
         idx = self._model.indexFromItem(item)
         self._tree.setCurrentIndex(idx)
         self._tree.scrollTo(idx)
-
-
-def _drive_display_name(path: Path) -> str:
-    drive = path.drive.rstrip(":\\/")
-    if drive:
-        return f"{drive} 드라이브"
-    return str(path)
