@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 from PyQt6.QtWidgets import (
@@ -7,18 +8,18 @@ from PyQt6.QtWidgets import (
     QPushButton, QButtonGroup, QFrame, QLineEdit,
     QSizePolicy,
 )
-from PyQt6.QtCore import Qt, QSize, QSettings
-from PyQt6.QtGui import QAction, QActionGroup, QIcon, QCloseEvent, QKeySequence, QShortcut
+from PyQt6.QtCore import Qt, QSize, QSettings, QPointF
+from PyQt6.QtGui import (
+    QAction, QActionGroup, QIcon, QCloseEvent, QKeySequence, QShortcut,
+    QPixmap, QPainter, QPen, QColor, QPolygonF,
+)
 
-from ui.file_browser import FileBrowserPanel
+from ui.file_browser import COMPUTER_LOCATION, FileBrowserPanel
 from ui.viewer_stack import ViewerStack
 from ui.file_panel import ViewStyle
 from services.file_type_detector import detect_viewer_mode
 from services.loader_thread import LoaderThread
 from models.viewer_mode import ViewerMode
-from loaders.image_loader import load_image
-from loaders.dxf_loader import load_dxf
-from loaders.stl_loader import load_stl
 
 
 _MODE_LABEL: dict[ViewerMode, str] = {
@@ -31,8 +32,15 @@ _MODE_LABEL: dict[ViewerMode, str] = {
 _OPEN_FILTER = (
     "지원 파일 (*.png *.jpg *.jpeg *.bmp *.gif *.ico *.tif *.tiff *.webp "
     "*.ppm *.pgm *.pbm *.pnm *.tga *.dds *.dib "
+    "*.jfif *.jpe *.jp2 *.j2k *.jpc *.jpf *.jpx "
+    "*.apng *.cur *.icns *.pcx *.qoi *.xbm *.xpm "
+    "*.icb *.vda *.vst *.sgi *.rgb *.rgba *.bw *.ras *.mpo "
     "*.dxf *.dwg *.stl *.step *.stp);;"
-    "이미지 (*.png *.jpg *.jpeg *.bmp *.gif *.ico *.tif *.tiff *.webp);;"
+    "이미지 (*.png *.jpg *.jpeg *.bmp *.gif *.ico *.tif *.tiff *.webp "
+    "*.ppm *.pgm *.pbm *.pnm *.tga *.dds *.dib "
+    "*.jfif *.jpe *.jp2 *.j2k *.jpc *.jpf *.jpx "
+    "*.apng *.cur *.icns *.pcx *.qoi *.xbm *.xpm "
+    "*.icb *.vda *.vst *.sgi *.rgb *.rgba *.bw *.ras *.mpo);;"
     "2D CAD (*.dxf *.dwg);;"
     "3D 모델 (*.stl *.step *.stp);;"
     "모든 파일 (*.*)"
@@ -70,8 +78,10 @@ class MainWindow(QMainWindow):
         self._current_mode: ViewerMode = ViewerMode.NONE
         self._pending_mode: ViewerMode = ViewerMode.NONE
         self._loader_thread: LoaderThread | None = None
+        self._loader_threads: list[LoaderThread] = []
         self._load_gen: int = 0
         self._recent_files: list[str] = []
+        self._image_viewer_signals_connected = False
 
         self._settings = QSettings()
 
@@ -110,9 +120,9 @@ class MainWindow(QMainWindow):
         self._viewer_stack = ViewerStack()
         self._viewer_stack.file_panel.file_opened.connect(self._on_file_opened)
         self._viewer_stack.file_panel.folder_navigated.connect(self._on_folder_selected)
-        iv = self._viewer_stack.image_viewer
-        iv.crop_mode_exited.connect(self._on_crop_mode_exited)
-        iv.undo_available.connect(self._btn_undo.setEnabled)
+        self._viewer_stack.file_panel.thumbnail_size_changed.connect(
+            lambda size: self._settings.setValue("thumbnailSize", size)
+        )
         right_layout.addWidget(self._viewer_stack)
 
         self._splitter.addWidget(self._file_browser)
@@ -216,12 +226,6 @@ class MainWindow(QMainWindow):
         self._btn_undo.clicked.connect(lambda: self._viewer_stack.image_viewer.undo())
         ig.addWidget(self._btn_undo)
 
-        self._btn_crop = QPushButton("✂ 자르기")
-        self._btn_crop.setCheckable(True)
-        self._btn_crop.setFixedHeight(34)
-        self._btn_crop.clicked.connect(self._on_crop_toggle)
-        ig.addWidget(self._btn_crop)
-
         btn_resize = QPushButton("크기 조정")
         btn_resize.setFixedHeight(34)
         btn_resize.clicked.connect(lambda: self._viewer_stack.image_viewer.open_resize_dialog())
@@ -251,12 +255,18 @@ class MainWindow(QMainWindow):
         rg.setSpacing(4)
         rg.addWidget(_make_vsep())
 
-        btn_cw = QPushButton("↻")
+        btn_cw = QPushButton()
+        btn_cw.setIcon(_make_rotate_icon(clockwise=True))
+        btn_cw.setIconSize(QSize(22, 22))
+        btn_cw.setToolTip("시계 방향 회전")
         btn_cw.setFixedSize(34, 34)
         btn_cw.clicked.connect(lambda: self._viewer_stack.image_viewer.rotate_cw())
         rg.addWidget(btn_cw)
 
-        btn_ccw = QPushButton("↺")
+        btn_ccw = QPushButton()
+        btn_ccw.setIcon(_make_rotate_icon(clockwise=False))
+        btn_ccw.setIconSize(QSize(22, 22))
+        btn_ccw.setToolTip("반시계 방향 회전")
         btn_ccw.setFixedSize(34, 34)
         btn_ccw.clicked.connect(lambda: self._viewer_stack.image_viewer.rotate_ccw())
         rg.addWidget(btn_ccw)
@@ -352,11 +362,18 @@ class MainWindow(QMainWindow):
         if state is not None:
             self.restoreState(state)
 
-        style_idx = int(self._settings.value("viewStyle", _STYLE_TO_IDX[ViewStyle.SMALL_ICONS]))
+        style_idx = _settings_int(
+            self._settings,
+            "viewStyle",
+            _STYLE_TO_IDX[ViewStyle.SMALL_ICONS],
+        )
         style = _IDX_TO_STYLE.get(style_idx, ViewStyle.SMALL_ICONS)
         self._viewer_stack.file_panel.set_view_style(style)
         self._style_buttons[style].setChecked(True)
         self._view_actions[style].setChecked(True)
+
+        thumb_size = _settings_int(self._settings, "thumbnailSize", 128)
+        self._viewer_stack.file_panel.set_thumbnail_size(thumb_size)
 
         recent = self._settings.value("recentFiles") or []
         if isinstance(recent, str):
@@ -364,15 +381,14 @@ class MainWindow(QMainWindow):
         self._recent_files = [p for p in recent if Path(p).exists()][:self._MAX_RECENT]
         self._update_recent_menu()
 
-        last_folder = self._settings.value("lastFolder", "")
-        if last_folder and Path(last_folder).is_dir():
-            self._on_folder_selected(last_folder)
+        self._file_browser.navigate_to(COMPUTER_LOCATION)
+        self._on_folder_selected(COMPUTER_LOCATION)
 
     def _save_settings(self) -> None:
         self._settings.setValue("geometry", self.saveGeometry())
         self._settings.setValue("windowState", self.saveState())
         folder = self._viewer_stack.file_panel._current_folder
-        if folder:
+        if folder and folder != COMPUTER_LOCATION:
             self._settings.setValue("lastFolder", folder)
         self._settings.setValue("recentFiles", self._recent_files)
         style = next(
@@ -380,9 +396,13 @@ class MainWindow(QMainWindow):
             ViewStyle.LARGE_ICONS,
         )
         self._settings.setValue("viewStyle", _STYLE_TO_IDX[style])
+        self._settings.setValue(
+            "thumbnailSize",
+            self._viewer_stack.file_panel.thumbnail_size(),
+        )
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        self._cancel_loading()
+        self._cancel_loading(wait=True)
         self._save_settings()
         super().closeEvent(event)
 
@@ -425,34 +445,55 @@ class MainWindow(QMainWindow):
 
     def _get_loader(self, mode: ViewerMode, ext: str):
         if mode == ViewerMode.IMAGE:
+            from loaders.image_loader import load_image
             return load_image
         if mode == ViewerMode.CAD_2D:
+            from loaders.dxf_loader import load_dxf
             return load_dxf
         if mode == ViewerMode.MODEL_3D:
             if ext in (".step", ".stp"):
                 from loaders.step_loader import load_step
                 return load_step
+            from loaders.stl_loader import load_stl
             return load_stl
         return None
+
+    def _ensure_image_viewer_signals(self) -> None:
+        if self._image_viewer_signals_connected:
+            return
+        iv = self._viewer_stack.image_viewer
+        iv.undo_available.connect(self._btn_undo.setEnabled)
+        self._image_viewer_signals_connected = True
 
     def _set_loading(self, loading: bool) -> None:
         self._header_bar.setEnabled(not loading)
         self._status_loading.setText("  로딩 중...  " if loading else "")
 
-    def _cancel_loading(self) -> None:
+    def _cancel_loading(self, wait: bool = False) -> None:
         self._load_gen += 1
         if self._loader_thread is not None:
-            if self._loader_thread.isRunning():
-                self._loader_thread.quit()
-                self._loader_thread.wait(500)
+            if wait and self._loader_thread.isRunning():
+                self._loader_thread.wait(1500)
             self._loader_thread = None
+        if wait:
+            for thread in list(self._loader_threads):
+                if thread.isRunning():
+                    thread.wait(1500)
         self._set_loading(False)
+
+    def _forget_loader_thread(self, thread: LoaderThread) -> None:
+        if thread in self._loader_threads:
+            self._loader_threads.remove(thread)
+        if self._loader_thread is thread:
+            self._loader_thread = None
+        thread.deleteLater()
 
     def _on_load_finished(self, gen: int, result) -> None:
         if gen != self._load_gen:
             return
         mode = self._pending_mode
         if mode == ViewerMode.IMAGE:
+            self._ensure_image_viewer_signals()
             self._viewer_stack.image_viewer.display_image(result, self._current_file or "")
         elif mode == ViewerMode.CAD_2D:
             self._viewer_stack.cad_viewer.display_dxf(result)
@@ -461,17 +502,14 @@ class MainWindow(QMainWindow):
         self._set_loading(False)
         if self._current_file:
             path = Path(self._current_file)
-            self._status_info.setText(
-                f"  {path.name}    {_format_size(path.stat().st_size)}"
-            )
+            size_text = _safe_file_size(path)
+            self._status_info.setText(f"  {path.name}    {size_text}")
         self._status_mode.setText(_MODE_LABEL.get(mode, ""))
-        self._loader_thread = None
 
     def _on_load_error(self, gen: int, msg: str) -> None:
         if gen != self._load_gen:
             return
         self._set_loading(False)
-        self._loader_thread = None
         QMessageBox.warning(self, "파일 오류", f"파일을 열 수 없습니다:\n{msg}")
 
     # ------------------------------------------------------------------
@@ -496,7 +534,7 @@ class MainWindow(QMainWindow):
         self._viewer_stack.show_browser()
         self._set_browse_mode()
         count = self._viewer_stack.file_panel.file_count()
-        self._status_info.setText(f"  {folder_path}    {count}개 항목")
+        self._status_info.setText(f"  {_folder_status_name(folder_path)}    {count}개 항목")
         self._status_zoom.setText("")
         self._status_mode.setText("")
 
@@ -513,9 +551,7 @@ class MainWindow(QMainWindow):
         if loader_fn is None:
             self._viewer_stack.switch_to(mode)
             self._set_back_only_mode()
-            self._status_info.setText(
-                f"  {path.name}    {_format_size(path.stat().st_size)}"
-            )
+            self._status_info.setText(f"  {path.name}    {_safe_file_size(path)}")
             self._status_mode.setText("")
             return
 
@@ -528,18 +564,22 @@ class MainWindow(QMainWindow):
             self._set_3d_mode()
 
         self._set_loading(True)
-        self._status_info.setText(f"  {path.name}    {_format_size(path.stat().st_size)}")
+        self._status_info.setText(f"  {path.name}    {_safe_file_size(path)}")
         self._status_zoom.setText("")
         self._status_mode.setText(_MODE_LABEL.get(mode, ""))
 
         self._load_gen += 1
         gen = self._load_gen
         self._loader_thread = LoaderThread(loader_fn, file_path, self)
-        self._loader_thread.finished.connect(
+        self._loader_threads.append(self._loader_thread)
+        self._loader_thread.loaded.connect(
             lambda result, g=gen: self._on_load_finished(g, result)
         )
         self._loader_thread.error.connect(
             lambda msg, g=gen: self._on_load_error(g, msg)
+        )
+        self._loader_thread.finished.connect(
+            lambda thread=self._loader_thread: self._forget_loader_thread(thread)
         )
         self._loader_thread.start()
 
@@ -557,27 +597,14 @@ class MainWindow(QMainWindow):
     def _on_search(self, text: str) -> None:
         self._viewer_stack.file_panel.set_filter(text)
 
-    def _on_crop_toggle(self, checked: bool) -> None:
-        iv = self._viewer_stack.image_viewer
-        if checked:
-            iv.enter_crop_mode()
-        else:
-            iv.exit_crop_mode()
-
-    def _on_crop_mode_exited(self) -> None:
-        self._btn_crop.setChecked(False)
-
     def _go_back(self) -> None:
-        iv = self._viewer_stack.image_viewer
-        if iv.is_crop_mode:
-            iv.exit_crop_mode()
         self._cancel_loading()
         self._current_mode = ViewerMode.NONE
         self._viewer_stack.show_browser()
         self._set_browse_mode()
         folder = self._viewer_stack.file_panel._current_folder
         count  = self._viewer_stack.file_panel.file_count()
-        self._status_info.setText(f"  {folder}    {count}개 항목")
+        self._status_info.setText(f"  {_folder_status_name(folder)}    {count}개 항목")
         self._status_zoom.setText("")
         self._status_mode.setText("")
 
@@ -619,13 +646,13 @@ class MainWindow(QMainWindow):
         self._viewer_bar.setVisible(False)
 
     def _set_image_mode(self) -> None:
+        self._ensure_image_viewer_signals()
         self._current_mode = ViewerMode.IMAGE
         self._browse_bar.setVisible(False)
         self._viewer_bar.setVisible(True)
         self._image_grp.setVisible(True)
         self._zoom_grp.setVisible(True)
         self._rot_grp.setVisible(True)
-        self._btn_crop.setChecked(False)
 
     def _set_cad_mode(self) -> None:
         self._current_mode = ViewerMode.CAD_2D
@@ -664,8 +691,80 @@ def _make_vsep() -> QWidget:
     return sep
 
 
+def _make_rotate_icon(clockwise: bool) -> QIcon:
+    size = 24
+    center = QPointF(size / 2, size / 2)
+    radius = 7.2
+    color = QColor("#5f4632")
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+
+    if clockwise:
+        degrees = range(220, -70, -10)
+    else:
+        degrees = range(-40, 250, 10)
+
+    points = [
+        QPointF(
+            center.x() + radius * math.cos(math.radians(deg)),
+            center.y() + radius * math.sin(math.radians(deg)),
+        )
+        for deg in degrees
+    ]
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(color, 2.2)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    painter.drawPolyline(QPolygonF(points))
+
+    end = points[-1]
+    prev = points[-2]
+    angle = math.atan2(end.y() - prev.y(), end.x() - prev.x())
+    arrow_size = 4.4
+    spread = 0.72
+    arrow = QPolygonF([
+        end,
+        QPointF(
+            end.x() - arrow_size * math.cos(angle - spread),
+            end.y() - arrow_size * math.sin(angle - spread),
+        ),
+        QPointF(
+            end.x() - arrow_size * math.cos(angle + spread),
+            end.y() - arrow_size * math.sin(angle + spread),
+        ),
+    ])
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.setBrush(color)
+    painter.drawPolygon(arrow)
+    painter.end()
+    return QIcon(pixmap)
+
+
 def _format_size(n: int) -> str:
     for unit, threshold in (("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)):
         if n >= threshold:
             return f"{n / threshold:.1f} {unit}"
     return f"{n} B"
+
+
+def _safe_file_size(path: Path) -> str:
+    try:
+        return _format_size(path.stat().st_size)
+    except OSError:
+        return "크기 알 수 없음"
+
+
+def _settings_int(settings: QSettings, key: str, default: int) -> int:
+    try:
+        return int(settings.value(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _folder_status_name(folder: str) -> str:
+    if folder == COMPUTER_LOCATION:
+        return "내 컴퓨터"
+    return folder

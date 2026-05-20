@@ -18,6 +18,8 @@ def load_stl(file_path: str) -> MeshData:
 
     verts = np.array(mesh.vertices, dtype=np.float32)
     faces = np.array(mesh.faces, dtype=np.int32)
+    if verts.size == 0 or faces.size == 0:
+        raise RuntimeError("3D 메시 데이터가 비어 있습니다.")
 
     flat_verts = np.ascontiguousarray(verts[faces].reshape(-1, 3))
 

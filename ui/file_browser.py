@@ -3,12 +3,13 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QTreeView, QLabel, QStyle, QProxyStyle, QFileIconProvider,
 )
-from PyQt6.QtCore import QDir, QTimer, Qt, QLineF, pyqtSignal
+from PyQt6.QtCore import QDir, Qt, QLineF, pyqtSignal
 from PyQt6.QtGui import QPainter, QPen, QColor, QStandardItemModel, QStandardItem
 
 from ui.folder_icons import make_folder_icon
 
 _SENTINEL = "__loading__"
+COMPUTER_LOCATION = "__computer__"
 
 _SPECIAL_FOLDERS = [
     ("바탕 화면", "Desktop"),
@@ -61,9 +62,8 @@ class FileBrowserPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._path_index: dict[str, QStandardItem] = {}
-        self._initial_path = str(Path.home())
+        self._initial_path = COMPUTER_LOCATION
         self._setup_ui()
-        QTimer.singleShot(0, lambda: self.folder_selected.emit(self._initial_path))
 
     # ------------------------------------------------------------------
     # Setup
@@ -97,9 +97,10 @@ class FileBrowserPanel(QWidget):
 
         pc_item = QStandardItem("내 컴퓨터")
         pc_item.setEditable(False)
-        pc_item.setData("", Qt.ItemDataRole.UserRole)
+        pc_item.setData(COMPUTER_LOCATION, Qt.ItemDataRole.UserRole)
         pc_item.setIcon(provider.icon(QFileIconProvider.IconType.Computer))
-        pc_item.setFlags(Qt.ItemFlag.ItemIsEnabled)  # not selectable
+        pc_item.setFlags(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+        self._path_index[COMPUTER_LOCATION] = pc_item
 
         home = Path.home()
         for display, sub in _SPECIAL_FOLDERS:
@@ -109,7 +110,7 @@ class FileBrowserPanel(QWidget):
 
         for fi in QDir.drives():
             path = Path(fi.absolutePath())
-            pc_item.appendRow(self._make_item(str(path), path))
+            pc_item.appendRow(self._make_item(_drive_display_name(path), path))
 
         self._model.appendRow(pc_item)
 
@@ -216,3 +217,10 @@ class FileBrowserPanel(QWidget):
         idx = self._model.indexFromItem(item)
         self._tree.setCurrentIndex(idx)
         self._tree.scrollTo(idx)
+
+
+def _drive_display_name(path: Path) -> str:
+    drive = path.drive.rstrip(":\\/")
+    if drive:
+        return f"{drive} 드라이브"
+    return str(path)

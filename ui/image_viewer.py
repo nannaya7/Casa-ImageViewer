@@ -2,7 +2,7 @@ from pathlib import Path
 
 from PIL import Image
 from PyQt6.QtWidgets import (
-    QGraphicsView, QGraphicsScene, QFileDialog, QMessageBox, QRubberBand,
+    QGraphicsView, QGraphicsScene, QFileDialog, QMessageBox, QRubberBand, QWidget,
 )
 from PyQt6.QtCore import Qt, QRectF, QPoint, QRect, QSize, pyqtSignal
 from PyQt6.QtGui import QPainter, QWheelEvent
@@ -16,8 +16,11 @@ class ImageViewerWidget(QGraphicsView):
     _MAX_ZOOM = 32.0
     _ZOOM_STEP = 1.25
     _UNDO_MAX = 20
+    _CROP_MIN_SIZE = 6
+    _CROP_HANDLE_SIZE = 9
+    _CROP_EDGE_GRAB = 5
 
-    crop_mode_exited = pyqtSignal()   # emitted when crop mode ends (crop done or cancelled)
+    crop_mode_exited = pyqtSignal()   # kept for compatibility with older callers
     undo_available = pyqtSignal(bool) # True when history stack is non-empty
 
     def __init__(self, parent=None):
@@ -31,15 +34,20 @@ class ImageViewerWidget(QGraphicsView):
         self._zoom: float = 1.0
         self._history: list[Image.Image] = []
 
-        self._crop_mode: bool = False
         self._rb: QRubberBand | None = None
         self._rb_origin = QPoint()
+        self._crop_rect = QRect()
+        self._crop_action: str = ""
+        self._crop_start_pos = QPoint()
+        self._crop_start_rect = QRect()
+        self._crop_handles: dict[str, QWidget] = {}
 
         self.setRenderHints(
             QPainter.RenderHint.Antialiasing |
             QPainter.RenderHint.SmoothPixmapTransform
         )
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+        self.setDragMode(QGraphicsView.DragMode.NoDrag)
+        self.setMouseTracking(True)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorViewCenter)
         self.setBackgroundBrush(Qt.GlobalColor.darkGray)
@@ -54,8 +62,7 @@ class ImageViewerWidget(QGraphicsView):
         self._zoom = 1.0
         self._history.clear()
         self.undo_available.emit(False)
-        if self._crop_mode:
-            self._exit_crop_internal()
+        self._cancel_crop_selection()
         self.resetTransform()
         self._refresh_scene()
         self.fit()
@@ -67,8 +74,7 @@ class ImageViewerWidget(QGraphicsView):
         self._zoom = 1.0
         self._history.clear()
         self.undo_available.emit(False)
-        if self._crop_mode:
-            self._exit_crop_internal()
+        self._cancel_crop_selection()
         self.resetTransform()
         self._refresh_scene()
         self.fit()
@@ -106,14 +112,13 @@ class ImageViewerWidget(QGraphicsView):
         self.undo_available.emit(bool(self._history))
 
     def enter_crop_mode(self) -> None:
-        self._crop_mode = True
-        self.setDragMode(QGraphicsView.DragMode.NoDrag)
-        self.viewport().setCursor(Qt.CursorShape.CrossCursor)
+        """Compatibility no-op: cropping is always available while an image is shown."""
+        self._cancel_crop_selection()
 
     def exit_crop_mode(self) -> None:
-        """Public: called by MainWindow to cancel crop mode."""
-        if self._crop_mode:
-            self._exit_crop_internal()
+        """Cancel the current crop selection."""
+        if self._crop_rect_is_usable() or self._crop_action:
+            self._cancel_crop_selection()
             self.crop_mode_exited.emit()
 
     def open_resize_dialog(self) -> None:
@@ -152,19 +157,23 @@ class ImageViewerWidget(QGraphicsView):
 
     @property
     def is_crop_mode(self) -> bool:
-        return self._crop_mode
+        return self._crop_rect_is_usable() or bool(self._crop_action)
 
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
-    def _exit_crop_internal(self) -> None:
-        self._crop_mode = False
-        self.setDragMode(QGraphicsView.DragMode.ScrollHandDrag)
+    def _cancel_crop_selection(self) -> None:
+        self._crop_action = ""
+        self._crop_rect = QRect()
         self.viewport().unsetCursor()
+        self._hide_crop_overlay()
+
+    def _hide_crop_overlay(self) -> None:
         if self._rb:
             self._rb.hide()
-            self._rb = None
+        for handle in self._crop_handles.values():
+            handle.hide()
 
     def _push_history(self) -> None:
         if self._pil_image is None:
@@ -208,39 +217,216 @@ class ImageViewerWidget(QGraphicsView):
         self._refresh_scene()
         self.fit()
 
+    def _ensure_crop_overlay(self) -> None:
+        if self._rb is None:
+            self._rb = QRubberBand(QRubberBand.Shape.Rectangle, self.viewport())
+        if self._crop_handles:
+            return
+        for name in (
+            "top_left", "top", "top_right", "right",
+            "bottom_right", "bottom", "bottom_left", "left",
+        ):
+            handle = QWidget(self.viewport())
+            handle.setFixedSize(self._CROP_HANDLE_SIZE, self._CROP_HANDLE_SIZE)
+            handle.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            handle.setStyleSheet(
+                "background-color: #F8F4EE;"
+                "border: 1px solid #5F4632;"
+                "border-radius: 2px;"
+            )
+            handle.hide()
+            self._crop_handles[name] = handle
+
+    def _set_crop_rect(self, rect: QRect) -> None:
+        rect = rect.normalized().intersected(self.viewport().rect())
+        self._crop_rect = rect
+        if rect.width() < 1 or rect.height() < 1:
+            self._hide_crop_overlay()
+            return
+
+        self._ensure_crop_overlay()
+        if self._rb is not None:
+            self._rb.setGeometry(rect)
+            self._rb.show()
+        self._update_crop_handles()
+
+    def _update_crop_handles(self) -> None:
+        if not self._crop_rect.isValid() or self._crop_rect.isNull():
+            self._hide_crop_overlay()
+            return
+        self._ensure_crop_overlay()
+        for name, rect in self._crop_handle_rects().items():
+            handle = self._crop_handles[name]
+            handle.setGeometry(rect)
+            handle.show()
+            handle.raise_()
+
+    def _crop_handle_rects(self) -> dict[str, QRect]:
+        rect = self._crop_rect
+        size = self._CROP_HANDLE_SIZE
+        half = size // 2
+        cx = rect.center().x()
+        cy = rect.center().y()
+        points = {
+            "top_left": rect.topLeft(),
+            "top": QPoint(cx, rect.top()),
+            "top_right": rect.topRight(),
+            "right": QPoint(rect.right(), cy),
+            "bottom_right": rect.bottomRight(),
+            "bottom": QPoint(cx, rect.bottom()),
+            "bottom_left": rect.bottomLeft(),
+            "left": QPoint(rect.left(), cy),
+        }
+        return {
+            name: QRect(point.x() - half, point.y() - half, size, size)
+            for name, point in points.items()
+        }
+
+    def _crop_hit_test(self, pos: QPoint) -> str:
+        if (
+            self._crop_rect.width() < self._CROP_MIN_SIZE
+            or self._crop_rect.height() < self._CROP_MIN_SIZE
+        ):
+            return ""
+        for name, rect in self._crop_handle_rects().items():
+            if rect.contains(pos):
+                return name
+
+        outer = self._crop_rect.adjusted(
+            -self._CROP_EDGE_GRAB,
+            -self._CROP_EDGE_GRAB,
+            self._CROP_EDGE_GRAB,
+            self._CROP_EDGE_GRAB,
+        )
+        inner = self._crop_rect.adjusted(
+            self._CROP_EDGE_GRAB,
+            self._CROP_EDGE_GRAB,
+            -self._CROP_EDGE_GRAB,
+            -self._CROP_EDGE_GRAB,
+        )
+        if outer.contains(pos) and not inner.contains(pos):
+            near_left = abs(pos.x() - self._crop_rect.left()) <= self._CROP_EDGE_GRAB
+            near_right = abs(pos.x() - self._crop_rect.right()) <= self._CROP_EDGE_GRAB
+            near_top = abs(pos.y() - self._crop_rect.top()) <= self._CROP_EDGE_GRAB
+            near_bottom = abs(pos.y() - self._crop_rect.bottom()) <= self._CROP_EDGE_GRAB
+            if near_top and near_left:
+                return "top_left"
+            if near_top and near_right:
+                return "top_right"
+            if near_bottom and near_left:
+                return "bottom_left"
+            if near_bottom and near_right:
+                return "bottom_right"
+            if near_left:
+                return "left"
+            if near_right:
+                return "right"
+            if near_top:
+                return "top"
+            if near_bottom:
+                return "bottom"
+        if self._crop_rect.contains(pos):
+            return "inside"
+        return ""
+
+    def _update_crop_cursor(self, pos: QPoint) -> None:
+        action = self._crop_action or self._crop_hit_test(pos)
+        cursor = {
+            "top_left": Qt.CursorShape.SizeFDiagCursor,
+            "bottom_right": Qt.CursorShape.SizeFDiagCursor,
+            "top_right": Qt.CursorShape.SizeBDiagCursor,
+            "bottom_left": Qt.CursorShape.SizeBDiagCursor,
+            "left": Qt.CursorShape.SizeHorCursor,
+            "right": Qt.CursorShape.SizeHorCursor,
+            "top": Qt.CursorShape.SizeVerCursor,
+            "bottom": Qt.CursorShape.SizeVerCursor,
+            "inside": Qt.CursorShape.PointingHandCursor,
+        }.get(action, Qt.CursorShape.CrossCursor)
+        self.viewport().setCursor(cursor)
+
+    def _clamp_to_viewport(self, pos: QPoint) -> QPoint:
+        bounds = self.viewport().rect()
+        return QPoint(
+            max(bounds.left(), min(bounds.right(), pos.x())),
+            max(bounds.top(), min(bounds.bottom(), pos.y())),
+        )
+
+    def _resize_crop_rect(self, action: str, pos: QPoint) -> QRect:
+        pos = self._clamp_to_viewport(pos)
+        rect = QRect(self._crop_start_rect)
+        if "left" in action:
+            rect.setLeft(pos.x())
+        if "right" in action:
+            rect.setRight(pos.x())
+        if "top" in action:
+            rect.setTop(pos.y())
+        if "bottom" in action:
+            rect.setBottom(pos.y())
+        return rect.normalized()
+
+    def _crop_rect_is_usable(self) -> bool:
+        return (
+            self._crop_rect.width() >= self._CROP_MIN_SIZE
+            and self._crop_rect.height() >= self._CROP_MIN_SIZE
+        )
+
+    def _commit_crop(self) -> None:
+        if not self._crop_rect_is_usable():
+            return
+        rect = QRect(self._crop_rect)
+        self._cancel_crop_selection()
+        self._do_crop(rect)
+
     # ------------------------------------------------------------------
     # Events
     # ------------------------------------------------------------------
 
     def mousePressEvent(self, event) -> None:
-        if self._crop_mode and event.button() == Qt.MouseButton.LeftButton:
-            self._rb_origin = event.pos()
-            if self._rb is None:
-                self._rb = QRubberBand(QRubberBand.Shape.Rectangle, self.viewport())
-            self._rb.setGeometry(QRect(self._rb_origin, QSize()))
-            self._rb.show()
+        if self._pil_image is not None and event.button() == Qt.MouseButton.LeftButton:
+            pos = event.pos()
+            hit = self._crop_hit_test(pos)
+            if hit == "inside":
+                self._commit_crop()
+                event.accept()
+                return
+
+            self._crop_action = hit or "draw"
+            self._crop_start_pos = pos
+            self._crop_start_rect = QRect(self._crop_rect)
+            if self._crop_action == "draw":
+                self._rb_origin = pos
+                self._set_crop_rect(QRect(self._rb_origin, QSize()))
+            self._update_crop_cursor(pos)
+            event.accept()
         else:
             super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event) -> None:
-        if self._crop_mode and self._rb is not None:
-            self._rb.setGeometry(QRect(self._rb_origin, event.pos()).normalized())
+        if self._pil_image is not None:
+            pos = event.pos()
+            if self._crop_action == "draw":
+                self._set_crop_rect(QRect(self._rb_origin, pos))
+            elif self._crop_action:
+                self._set_crop_rect(self._resize_crop_rect(self._crop_action, pos))
+            self._update_crop_cursor(pos)
+            event.accept()
         else:
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
-        if self._crop_mode and event.button() == Qt.MouseButton.LeftButton:
-            rect = QRect(self._rb_origin, event.pos()).normalized()
-            # exit first so crop_mode_exited fires before scene update
-            self._exit_crop_internal()
-            self.crop_mode_exited.emit()
-            self._do_crop(rect)
+        if self._pil_image is not None and event.button() == Qt.MouseButton.LeftButton:
+            if not self._crop_rect_is_usable():
+                self._crop_rect = QRect()
+                self._hide_crop_overlay()
+            self._crop_action = ""
+            self._update_crop_cursor(event.pos())
+            event.accept()
         else:
             super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event) -> None:
-        if self._crop_mode and event.key() == Qt.Key.Key_Escape:
-            self.exit_crop_mode()
+        if event.key() == Qt.Key.Key_Escape and self.is_crop_mode:
+            self._cancel_crop_selection()
         else:
             super().keyPressEvent(event)
 

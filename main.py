@@ -1,5 +1,6 @@
 import sys
 import ctypes
+import traceback
 from pathlib import Path
 from PyQt6.QtCore import QTimer
 from PyQt6.QtGui import QIcon
@@ -8,6 +9,26 @@ from ui.main_window import MainWindow
 
 _ICON_PATH = Path(__file__).parent / "image" / "icon" / "Casa-ImageViewer-ICON.png"
 _APP_ID    = "PyImageViewer.CasaImageViewer.1"
+
+
+def _runtime_log_path() -> Path:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).with_suffix(".runtime.log")
+    return Path(__file__).with_name("runtime.log")
+
+
+def _write_runtime_log(message: str) -> None:
+    try:
+        with _runtime_log_path().open("a", encoding="utf-8") as f:
+            f.write(message.rstrip() + "\n")
+    except OSError:
+        pass
+
+
+def _log_unhandled_exception(exc_type, exc, tb) -> None:
+    _write_runtime_log("Unhandled exception:")
+    _write_runtime_log("".join(traceback.format_exception(exc_type, exc, tb)))
+    sys.__excepthook__(exc_type, exc, tb)
 
 _APP_QSS = """
 /* ── Base ─────────────────────────────────────────────────────── */
@@ -65,6 +86,7 @@ QPushButton {
     border-radius: 12px;
     padding: 4px 14px;
     color: #4A382B;
+    font-weight: 600;
 }
 QPushButton:hover {
     background-color: #F3E5D0;
@@ -113,7 +135,7 @@ QPushButton#segBtn {
     border-radius: 12px;
     padding: 4px 14px;
     color: #7A6050;
-    font-weight: normal;
+    font-weight: 600;
 }
 QPushButton#segBtn:checked {
     background-color: #D8A15B;
@@ -352,6 +374,8 @@ QDialogButtonBox QPushButton {
 
 
 def main() -> None:
+    sys.excepthook = _log_unhandled_exception
+
     if sys.platform == "win32":
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(_APP_ID)
 
@@ -372,7 +396,8 @@ def main() -> None:
         if arg_path.is_file():
             QTimer.singleShot(0, lambda: window.open_file(str(arg_path)))
 
-    sys.exit(app.exec())
+    code = app.exec()
+    sys.exit(code)
 
 
 if __name__ == "__main__":

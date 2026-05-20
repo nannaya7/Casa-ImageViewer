@@ -5,6 +5,12 @@ IMAGE_EXTENSIONS = frozenset({
     '.png', '.jpg', '.jpeg', '.bmp', '.gif', '.ico',
     '.tif', '.tiff', '.webp',
     '.ppm', '.pgm', '.pbm', '.pnm', '.tga', '.dds', '.dib',
+    '.jfif', '.jpe',
+    '.jp2', '.j2k', '.jpc', '.jpf', '.jpx',
+    '.apng', '.cur', '.icns', '.pcx', '.qoi', '.xbm', '.xpm',
+    '.icb', '.vda', '.vst',
+    '.sgi', '.rgb', '.rgba', '.bw',
+    '.ras', '.mpo',
     '.heic', '.heif', '.avif', '.svg', '.raw', '.psd', '.pdf',
 })
 

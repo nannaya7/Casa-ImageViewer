@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+
+exe/
+EXE/
+build/
+dist/
+*.spec
+runtime.log
+*.runtime.log

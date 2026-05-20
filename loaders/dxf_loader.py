@@ -1,4 +1,8 @@
 import math
+import os
+import shutil
+import sys
+from pathlib import Path
 
 import ezdxf
 from ezdxf.math import Vec2, bulge_to_arc
@@ -6,8 +10,8 @@ from PyQt6.QtGui import QPainterPath
 
 
 def load_dxf(file_path: str) -> QPainterPath:
-    """Parse DXF modelspace and return a QPainterPath (Y-axis flipped for Qt)."""
-    doc = ezdxf.readfile(file_path)
+    """Parse DXF/DWG modelspace and return a QPainterPath (Y-axis flipped for Qt)."""
+    doc = _read_cad_file(file_path)
     msp = doc.modelspace()
     path = QPainterPath()
     for entity in msp:
@@ -16,6 +20,76 @@ def load_dxf(file_path: str) -> QPainterPath:
         except Exception:
             pass
     return path
+
+
+def _read_cad_file(file_path: str):
+    ext = Path(file_path).suffix.lower()
+    if ext == ".dwg":
+        return _read_dwg(file_path)
+    return ezdxf.readfile(file_path)
+
+
+def _read_dwg(file_path: str):
+    try:
+        from ezdxf.addons import odafc
+    except ImportError as exc:
+        raise RuntimeError(
+            "DWG 파일을 열려면 ezdxf의 ODA 변환 기능이 필요합니다."
+        ) from exc
+
+    _configure_odafc_path(odafc)
+    try:
+        return odafc.readfile(file_path, audit=False)
+    except odafc.ODAFCNotInstalledError as exc:
+        raise RuntimeError(
+            "DWG 파일은 직접 읽을 수 없어 ODA File Converter가 필요합니다.\n"
+            "ODA File Converter를 설치한 뒤 다시 실행해 주세요.\n"
+            "설치 후에도 인식되지 않으면 ODA_FILE_CONVERTER 환경 변수에 "
+            "ODAFileConverter.exe 전체 경로를 지정하면 됩니다."
+        ) from exc
+    except odafc.ODAFCError as exc:
+        raise RuntimeError(f"DWG 변환에 실패했습니다:\n{exc}") from exc
+
+
+def _configure_odafc_path(odafc) -> None:
+    exe = _find_odafc_exe()
+    if exe is None:
+        return
+    key = "win_exec_path" if sys.platform == "win32" else "unix_exec_path"
+    ezdxf.options.set("odafc-addon", key, str(exe))
+
+
+def _find_odafc_exe() -> Path | None:
+    for env_name in ("ODA_FILE_CONVERTER", "ODAFC_PATH"):
+        value = os.environ.get(env_name)
+        if value:
+            path = Path(value).expanduser()
+            if path.is_dir():
+                path = path / _odafc_exe_name()
+            if path.is_file():
+                return path
+
+    found = shutil.which("ODAFileConverter")
+    if found:
+        return Path(found)
+
+    if sys.platform == "win32":
+        candidates: list[Path] = []
+        for root in (os.environ.get("ProgramFiles"), os.environ.get("ProgramFiles(x86)")):
+            if not root:
+                continue
+            base = Path(root)
+            candidates.extend(base.glob("ODA/ODAFileConverter*/ODAFileConverter.exe"))
+            candidates.extend(base.glob("Open Design Alliance/ODAFileConverter*/ODAFileConverter.exe"))
+        for path in candidates:
+            if path.is_file():
+                return path
+
+    return None
+
+
+def _odafc_exe_name() -> str:
+    return "ODAFileConverter.exe" if sys.platform == "win32" else "ODAFileConverter"
 
 
 def _add_entity(entity, path: QPainterPath) -> None:
