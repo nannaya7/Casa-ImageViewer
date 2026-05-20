@@ -64,8 +64,8 @@
 |---|---|---|
 | Language | Python 3.10+ | 기본 개발 언어 |
 | GUI | PyQt6 / PySide6 | UI 구성 |
-| Image Core | Pillow | 이미지 처리 |
-| 2D CAD Parser | ezdxf | DXF 파싱 |
+| Image Core | Pillow / pillow-heif / rawpy / pypdfium2 / QtSvg | 이미지 처리 및 확장 포맷 |
+| 2D CAD Parser | ezdxf + ODA File Converter | DXF 파싱 및 DWG 변환 |
 | 3D Mesh | trimesh | STL 로드 |
 | STEP Parser | pythonOCC / CadQuery | STEP 처리 |
 | 3D Rendering | PyOpenGL / VTK | 3D 렌더링 |
@@ -142,9 +142,11 @@ ViewerApp
 - 저장 시에만 파일 기록
 
 ### Crop 설계
-- QRubberBand 사용
-- ROI 좌표 계산
-- image.crop() 수행
+- 별도 자르기 버튼 없이 이미지 위 왼쪽 드래그로 ROI 선택
+- QRubberBand와 8개 핸들로 선택 영역 표시
+- 마우스 릴리즈 후 즉시 적용하지 않고, 모서리/변 드래그로 영역 조절
+- 선택 영역 내부 클릭 시 ROI 좌표 계산 후 `image.crop()` 수행
+- `Esc`로 현재 선택 영역 취소
 
 ### Resize 설계
 - 비율 유지 옵션
@@ -166,9 +168,11 @@ ViewerApp
 - Fit To Window
 
 ### DWG 처리 정책
-- 직접 파싱 미지원
-- ODA File Converter 기반
-- DWG → DXF 변환 후 로딩
+- DWG 직접 파싱은 미지원
+- `ezdxf.addons.odafc` + ODA File Converter 기반
+- DWG → 임시 DXF 변환 후 기존 DXF 렌더링 파이프라인으로 로딩
+- 변환기 자동 탐색: PATH, `Program Files`, `ODA_FILE_CONVERTER`, `ODAFC_PATH`
+- 변환기가 없거나 변환 실패 시 사용자에게 원인 안내
 
 ---
 
@@ -223,7 +227,7 @@ PyQt6 기반으로 파일 탐색기와 QStackedWidget 구조를 구현해줘.
 
 ```text
 Pillow 기반 이미지 Crop 기능을 구현해줘.
-QRubberBand를 사용해서 ROI를 선택하고 crop 수행하게 해줘.
+QRubberBand와 조절 핸들을 사용해서 ROI를 선택하고, 내부 클릭으로 crop을 확정하게 해줘.
 ```
 
 ---
@@ -241,7 +245,8 @@ QRubberBand를 사용해서 ROI를 선택하고 crop 수행하게 해줘.
 | 7단계 | 안정화 (QThread 비동기, QSettings, 최근 파일) | 완료 |
 | 8단계 | GUI 리디자인 (크림 테마, 커스텀 헤더 바, 검색 필터) | 완료 |
 | 9단계 | UI 개선 (폴더 아이콘, 뷰 스타일, 썸네일, 내 컴퓨터, 슬라이더) | 완료 |
-| 10단계 | PyInstaller 패키징 (단일 실행 파일 배포) | 예정 |
+| 10단계 | PyInstaller 패키징 (onefile/fast/debug 빌드) | 완료 |
+| 11단계 | 실행 속도 최적화, 확장 포맷, DWG 변환, Crop UX 개선 | 완료 |
 
 ### 9단계 주요 구현 사항
 
@@ -260,6 +265,32 @@ QRubberBand를 사용해서 ROI를 선택하고 crop 수행하게 해줘.
 
 - 7종 PNG 지연 로딩, 경로 유형별 자동 매핑
 - QIcon 상태별 다중 pixmap (Normal/Active/Selected)
+
+### 10~11단계 주요 구현 사항
+
+#### PyInstaller 패키징
+
+- `build_exe.bat`: 터미널 창 없는 onefile 빌드
+- `build_exe_fast.bat`: 빠른 실행을 위한 onedir 빌드
+- `build_exe_debug.bat`: 콘솔 표시 디버그 빌드
+- 결과물과 빌드 로그는 `exe/` 아래 생성
+- 앱/실행 파일 아이콘은 `Casa-ImageViewer-ICON`으로 통일
+
+#### 실행 속도 최적화
+
+- 이미지/CAD/3D 뷰어 lazy 생성
+- 로더 import 지연
+- 시작 시 중복 폴더 로딩 제거
+- 썸네일 생성은 큰 아이콘 보기에서만 수행
+- 현재 활성 파일 목록 뷰만 갱신
+
+#### 확장 포맷
+
+- HEIC/HEIF/AVIF: `pillow-heif`
+- SVG: `QSvgRenderer`
+- RAW: `rawpy`
+- PDF: `pypdfium2` 첫 페이지 렌더링
+- PSD: Pillow 로딩
 
 ---
 
@@ -281,17 +312,13 @@ QRubberBand를 사용해서 ROI를 선택하고 crop 수행하게 해줘.
 
 본 프로젝트는 이미지 편집 기능과 CAD/3D 순수 뷰어 기능을 통합한 데스크톱 애플리케이션 구축을 목표로 한다.
 
-MVP 단계에서는:
+현재 구현 범위는 다음을 포함한다:
+
 - 이미지 Viewer/Editor
 - DXF Viewer
-- STL Viewer
+- DWG 변환 로딩
+- STL/STEP 3D Viewer
+- HEIC/HEIF/AVIF, SVG, RAW, PSD, PDF 확장 이미지 포맷
+- PyInstaller 기반 실행 파일 빌드
 
-까지 우선 구현하고, 이후:
-- STEP
-- DWG
-- HEIC/AVIF
-- SVG/PDF
-
-등의 고급 포맷을 확장하는 방식으로 진행한다.
-
-포맷별 Loader 구조와 비동기 로딩 아키텍처를 기반으로 확장성과 유지보수성을 확보한다.
+포맷별 Loader 구조, lazy 뷰어 초기화, 비동기 로딩 아키텍처를 기반으로 확장성과 유지보수성을 확보한다.

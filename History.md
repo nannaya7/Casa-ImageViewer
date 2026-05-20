@@ -1,5 +1,74 @@
 # History
 
+## Release 0.10 — 2026-05-20
+
+### 실행 속도, 패키징, 포맷 지원, 이미지 편집 UX 개선
+
+#### 시작 속도 및 안정화
+
+- `ui/viewer_stack.py`: 이미지/CAD/3D 뷰어를 앱 시작 시 모두 만들지 않고, 필요한 순간에 생성하는 lazy 초기화로 변경
+- `ui/main_window.py`: 이미지/DXF/STL/STEP 로더 import를 파일 열기 시점으로 지연
+- 시작 시 `runtime.log` 기록을 제거하고, 예외 발생 시에만 `*.runtime.log` 기록
+- 초기 폴더 로딩을 "내 컴퓨터" 1회로 정리해 중복 로딩 제거
+- `LoaderThread.finished` 커스텀 신호를 `loaded`로 변경해 `QThread.finished`와의 이름 충돌 제거
+- 로더/썸네일 스레드 lifecycle 정리, stale 결과 무시, 닫기 시 wait 처리 보강
+- 파일 크기 조회, `QSettings` 정수 변환, 권한 없는 폴더 접근, 빈 STL 메시 등 예외 처리 보강
+
+#### 파일 탐색 및 파일 관리
+
+- `ui/file_browser.py`: 드라이브 표시를 `C:\` 형식에서 `C 드라이브`, `D 드라이브` 형식으로 변경
+- "내 컴퓨터"를 선택 가능한 항목으로 변경하고, 오른쪽 파일 목록에 특수 폴더와 드라이브를 표시
+- 앱 시작 위치를 항상 "내 컴퓨터"로 변경
+- `ui/file_panel.py`: 파일 목록 우클릭 메뉴 추가
+  - 열기, 기본 앱으로 열기, 파일 위치 열기, 이름 바꾸기, 휴지통으로 이동, 경로 복사, 새로 고침, 현재 폴더 열기
+- 미리보기 슬라이더 값을 `QSettings`에 저장/복원
+- 현재 보이는 파일 목록 뷰만 populate하도록 최적화해 폴더 전환 속도 개선
+- 썸네일 생성은 큰 아이콘 보기에서만 수행하도록 변경
+
+#### 이미지 포맷 확장
+
+- 이미지 지원 확장자 추가:
+  - `.heic`, `.heif`, `.avif`, `.svg`, `.raw`, `.pdf`, `.psd`
+- `loaders/image_loader.py`
+  - HEIC/HEIF/AVIF: `pillow-heif` 등록 후 Pillow 로딩
+  - SVG: `QSvgRenderer`로 래스터화 후 PIL 이미지 변환
+  - RAW: `rawpy`로 현상 후 PIL 이미지 변환
+  - PDF: `pypdfium2`로 첫 페이지 렌더링
+  - PSD: Pillow 로딩 경로 사용
+- `requirements.txt`에 `pillow-heif`, `rawpy`, `pypdfium2` 추가
+
+#### DWG 지원 정책 구현
+
+- `loaders/dxf_loader.py`: `.dwg` 파일은 `ezdxf.addons.odafc`를 통해 ODA File Converter로 임시 DXF 변환 후 로딩
+- ODA File Converter 자동 탐색:
+  - PATH의 `ODAFileConverter`
+  - `C:\Program Files\ODA\...`
+  - `ODA_FILE_CONVERTER` 또는 `ODAFC_PATH` 환경 변수
+- 변환기가 없거나 변환 실패 시 원인을 안내하는 오류 메시지 표시
+
+#### 이미지 편집 UX
+
+- 자르기 버튼 제거
+- 이미지 위에서 바로 왼쪽 드래그하면 자르기 선택 영역 생성
+- 마우스를 떼도 즉시 적용하지 않고 선택 영역 유지
+- 모서리/변 핸들 드래그로 영역 조절
+- 선택 영역 안쪽 클릭 시 최종 자르기 적용
+- `Esc`로 현재 선택 영역 취소
+- 회전 버튼 텍스트(`↻`, `↺`)를 직접 그린 QIcon으로 교체해 폰트/인코딩 깨짐 방지
+- 상단 툴바 버튼 글자 굵기를 `뒤로` 버튼과 동일하게 조정
+
+#### PyInstaller 빌드
+
+- `build_exe.bat`: windowed onefile 빌드, 결과물은 `exe/` 아래 생성
+- `build_exe_fast.bat`: 빠른 실행을 위한 onedir 빌드
+- `build_exe_debug.bat`: 콘솔 표시 디버그 빌드
+- 빌드 로그를 `exe/build.log`, `exe/build_fast.log`, `exe/build_debug.log`에 저장
+- 실행 파일 아이콘을 `image/icon/Casa-ImageViewer-ICON.ico`로 지정
+- `.gitignore`: `exe/`, `EXE/`, `runtime.log`, `*.runtime.log` 제외
+- PyInstaller Qt 충돌 방지를 위해 PyQt5/PySide 계열 제외, `ezdxf.addons.odafc` hidden import 추가
+
+---
+
 ## Release 0.9+ — 2026-05-19
 
 ### UI 개선 (내 컴퓨터 · 미리보기 슬라이더 · 간단히 모드 · 폴더 아이콘 · 팔레트)
