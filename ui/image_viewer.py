@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 
 from PIL import Image
@@ -37,10 +38,15 @@ class ImageViewerWidget(QGraphicsView):
         self._rb: QRubberBand | None = None
         self._rb_origin = QPoint()
         self._crop_rect = QRect()
+        self._crop_scene_rect = QRectF()
         self._crop_action: str = ""
         self._crop_start_pos = QPoint()
         self._crop_start_rect = QRect()
         self._crop_handles: dict[str, QWidget] = {}
+        self._pan_active = False
+        self._pan_start_pos = QPoint()
+        self._pan_start_h = 0
+        self._pan_start_v = 0
 
         self.setRenderHints(
             QPainter.RenderHint.Antialiasing |
@@ -87,10 +93,14 @@ class ImageViewerWidget(QGraphicsView):
 
     def fit(self) -> None:
         if self._pixmap_item:
+            self.resetTransform()
+            self._zoom = 1.0
             self.fitInView(self._pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
+            self._update_crop_overlay_from_scene()
 
     def rotate_cw(self) -> None:
         if self._pil_image:
+            self._cancel_crop_selection()
             self._push_history()
             self._pil_image = self._pil_image.transpose(Image.Transpose.ROTATE_270)
             self._refresh_scene()
@@ -98,6 +108,7 @@ class ImageViewerWidget(QGraphicsView):
 
     def rotate_ccw(self) -> None:
         if self._pil_image:
+            self._cancel_crop_selection()
             self._push_history()
             self._pil_image = self._pil_image.transpose(Image.Transpose.ROTATE_90)
             self._refresh_scene()
@@ -106,6 +117,7 @@ class ImageViewerWidget(QGraphicsView):
     def undo(self) -> None:
         if not self._history:
             return
+        self._cancel_crop_selection()
         self._pil_image = self._history.pop()
         self._refresh_scene()
         self.fit()
@@ -129,6 +141,7 @@ class ImageViewerWidget(QGraphicsView):
         if dlg.exec() == ResizeDialog.DialogCode.Accepted:
             nw, nh = dlg.result_size
             if (nw, nh) != (w, h):
+                self._cancel_crop_selection()
                 self._push_history()
                 self._pil_image = self._pil_image.resize((nw, nh), Image.Resampling.LANCZOS)
                 self._refresh_scene()
@@ -139,7 +152,7 @@ class ImageViewerWidget(QGraphicsView):
             return
         stem = Path(self._file_path).stem if self._file_path else "image"
         folder = str(Path(self._file_path).parent) if self._file_path else ""
-        default = f"{folder}/{stem}_copy" if folder else stem
+        default = str(Path(folder) / f"{stem}_copy.png") if folder else f"{stem}_copy.png"
 
         path, _ = QFileDialog.getSaveFileName(
             self, "다른 이름으로 저장", default,
@@ -148,8 +161,12 @@ class ImageViewerWidget(QGraphicsView):
         if not path:
             return
         try:
+            target = Path(path)
+            if not target.suffix:
+                target = target.with_suffix(".png")
+                path = str(target)
             img = self._pil_image.copy()
-            if Path(path).suffix.lower() in (".jpg", ".jpeg") and img.mode == "RGBA":
+            if target.suffix.lower() in (".jpg", ".jpeg") and img.mode not in ("RGB", "L"):
                 img = img.convert("RGB")
             img.save(path)
         except Exception as exc:
@@ -166,6 +183,8 @@ class ImageViewerWidget(QGraphicsView):
     def _cancel_crop_selection(self) -> None:
         self._crop_action = ""
         self._crop_rect = QRect()
+        self._crop_scene_rect = QRectF()
+        self._pan_active = False
         self.viewport().unsetCursor()
         self._hide_crop_overlay()
 
@@ -199,17 +218,17 @@ class ImageViewerWidget(QGraphicsView):
             return
         self._zoom = new_zoom
         self.scale(factor, factor)
+        self._update_crop_overlay_from_scene()
 
-    def _do_crop(self, viewport_rect: QRect) -> None:
+    def _do_crop(self, scene_rect: QRectF) -> None:
         if self._pil_image is None:
             return
-        tl = self.mapToScene(viewport_rect.topLeft())
-        br = self.mapToScene(viewport_rect.bottomRight())
+        rect = scene_rect.normalized()
         img_w, img_h = self._pil_image.size
-        x0 = max(0, int(tl.x()))
-        y0 = max(0, int(tl.y()))
-        x1 = min(img_w, int(br.x()))
-        y1 = min(img_h, int(br.y()))
+        x0 = max(0, math.floor(rect.left()))
+        y0 = max(0, math.floor(rect.top()))
+        x1 = min(img_w, math.ceil(rect.right()))
+        y1 = min(img_h, math.ceil(rect.bottom()))
         if x1 - x0 < 2 or y1 - y0 < 2:
             return
         self._push_history()
@@ -237,12 +256,16 @@ class ImageViewerWidget(QGraphicsView):
             handle.hide()
             self._crop_handles[name] = handle
 
-    def _set_crop_rect(self, rect: QRect) -> None:
+    def _set_crop_rect(self, rect: QRect, update_scene: bool = True) -> None:
         rect = rect.normalized().intersected(self.viewport().rect())
         self._crop_rect = rect
         if rect.width() < 1 or rect.height() < 1:
+            if update_scene:
+                self._crop_scene_rect = QRectF()
             self._hide_crop_overlay()
             return
+        if update_scene:
+            self._crop_scene_rect = self._viewport_rect_to_scene_rect(rect)
 
         self._ensure_crop_overlay()
         if self._rb is not None:
@@ -281,6 +304,18 @@ class ImageViewerWidget(QGraphicsView):
             name: QRect(point.x() - half, point.y() - half, size, size)
             for name, point in points.items()
         }
+
+    def _viewport_rect_to_scene_rect(self, rect: QRect) -> QRectF:
+        tl = self.mapToScene(rect.topLeft())
+        br = self.mapToScene(rect.bottomRight())
+        return QRectF(tl, br).normalized()
+
+    def _update_crop_overlay_from_scene(self) -> None:
+        if self._crop_scene_rect.isNull() or not self._crop_scene_rect.isValid():
+            return
+        tl = self.mapFromScene(self._crop_scene_rect.topLeft())
+        br = self.mapFromScene(self._crop_scene_rect.bottomRight())
+        self._set_crop_rect(QRect(tl, br), update_scene=False)
 
     def _crop_hit_test(self, pos: QPoint) -> str:
         if (
@@ -330,7 +365,15 @@ class ImageViewerWidget(QGraphicsView):
         return ""
 
     def _update_crop_cursor(self, pos: QPoint) -> None:
+        if self._pan_active:
+            self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
+            return
+
         action = self._crop_action or self._crop_hit_test(pos)
+        if not action and self._can_pan():
+            self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
+            return
+
         cursor = {
             "top_left": Qt.CursorShape.SizeFDiagCursor,
             "bottom_right": Qt.CursorShape.SizeFDiagCursor,
@@ -343,6 +386,24 @@ class ImageViewerWidget(QGraphicsView):
             "inside": Qt.CursorShape.PointingHandCursor,
         }.get(action, Qt.CursorShape.CrossCursor)
         self.viewport().setCursor(cursor)
+
+    def _can_pan(self) -> bool:
+        return (
+            self.horizontalScrollBar().maximum() > self.horizontalScrollBar().minimum()
+            or self.verticalScrollBar().maximum() > self.verticalScrollBar().minimum()
+        )
+
+    def _start_pan(self, pos: QPoint) -> None:
+        self._pan_active = True
+        self._pan_start_pos = pos
+        self._pan_start_h = self.horizontalScrollBar().value()
+        self._pan_start_v = self.verticalScrollBar().value()
+        self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
+
+    def _update_pan(self, pos: QPoint) -> None:
+        delta = pos - self._pan_start_pos
+        self.horizontalScrollBar().setValue(self._pan_start_h - delta.x())
+        self.verticalScrollBar().setValue(self._pan_start_v - delta.y())
 
     def _clamp_to_viewport(self, pos: QPoint) -> QPoint:
         bounds = self.viewport().rect()
@@ -368,12 +429,14 @@ class ImageViewerWidget(QGraphicsView):
         return (
             self._crop_rect.width() >= self._CROP_MIN_SIZE
             and self._crop_rect.height() >= self._CROP_MIN_SIZE
+            and self._crop_scene_rect.isValid()
+            and not self._crop_scene_rect.isNull()
         )
 
     def _commit_crop(self) -> None:
         if not self._crop_rect_is_usable():
             return
-        rect = QRect(self._crop_rect)
+        rect = QRectF(self._crop_scene_rect)
         self._cancel_crop_selection()
         self._do_crop(rect)
 
@@ -382,6 +445,11 @@ class ImageViewerWidget(QGraphicsView):
     # ------------------------------------------------------------------
 
     def mousePressEvent(self, event) -> None:
+        if self._pil_image is not None and event.button() == Qt.MouseButton.RightButton and self._can_pan():
+            self._start_pan(event.pos())
+            event.accept()
+            return
+
         if self._pil_image is not None and event.button() == Qt.MouseButton.LeftButton:
             pos = event.pos()
             hit = self._crop_hit_test(pos)
@@ -404,7 +472,9 @@ class ImageViewerWidget(QGraphicsView):
     def mouseMoveEvent(self, event) -> None:
         if self._pil_image is not None:
             pos = event.pos()
-            if self._crop_action == "draw":
+            if self._pan_active:
+                self._update_pan(pos)
+            elif self._crop_action == "draw":
                 self._set_crop_rect(QRect(self._rb_origin, pos))
             elif self._crop_action:
                 self._set_crop_rect(self._resize_crop_rect(self._crop_action, pos))
@@ -414,9 +484,17 @@ class ImageViewerWidget(QGraphicsView):
             super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event) -> None:
+        if self._pil_image is not None and event.button() == Qt.MouseButton.RightButton:
+            if self._pan_active:
+                self._pan_active = False
+                self._update_crop_cursor(event.pos())
+            event.accept()
+            return
+
         if self._pil_image is not None and event.button() == Qt.MouseButton.LeftButton:
             if not self._crop_rect_is_usable():
                 self._crop_rect = QRect()
+                self._crop_scene_rect = QRectF()
                 self._hide_crop_overlay()
             self._crop_action = ""
             self._update_crop_cursor(event.pos())
@@ -433,3 +511,11 @@ class ImageViewerWidget(QGraphicsView):
     def wheelEvent(self, event: QWheelEvent) -> None:
         self._apply_zoom(self._ZOOM_STEP if event.angleDelta().y() > 0 else 1 / self._ZOOM_STEP)
         event.accept()
+
+    def scrollContentsBy(self, dx: int, dy: int) -> None:
+        super().scrollContentsBy(dx, dy)
+        self._update_crop_overlay_from_scene()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._update_crop_overlay_from_scene()

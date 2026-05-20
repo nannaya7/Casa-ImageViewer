@@ -63,6 +63,7 @@ class FileBrowserPanel(QWidget):
         super().__init__(parent)
         self._path_index: dict[str, QStandardItem] = {}
         self._initial_path = COMPUTER_LOCATION
+        self._branch_style: _ArrowBranchStyle | None = None
         self._setup_ui()
 
     # ------------------------------------------------------------------
@@ -82,7 +83,8 @@ class FileBrowserPanel(QWidget):
         self._model = QStandardItemModel()
 
         self._tree = QTreeView()
-        self._tree.setStyle(_ArrowBranchStyle(self._tree.style()))
+        self._branch_style = _ArrowBranchStyle()
+        self._tree.setStyle(self._branch_style)
         self._tree.setModel(self._model)
         self._tree.setHeaderHidden(True)
         self._tree.clicked.connect(self._on_folder_clicked)

@@ -43,3 +43,7 @@ def make_folder_icon(path: Path) -> QIcon:
     icon.addPixmap(_pm["open"],           QIcon.Mode.Active,   QIcon.State.Off)
     icon.addPixmap(_pm["selected"],       QIcon.Mode.Selected, QIcon.State.Off)
     return icon
+
+
+def clear_folder_icon_cache() -> None:
+    _pm.clear()

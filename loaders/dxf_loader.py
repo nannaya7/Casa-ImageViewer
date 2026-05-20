@@ -116,12 +116,12 @@ def _add_entity(entity, path: QPainterPath) -> None:
 
     elif t == "SPLINE":
         pts = list(entity.flattening(0.5))
-        closed = bool(entity.dxf.get("closed", 0))
+        closed = _entity_is_closed(entity)
         _add_vec3_sequence(path, pts, closed=closed)
 
     elif t == "ELLIPSE":
         pts = list(entity.flattening(0.5))
-        _add_vec3_sequence(path, pts, closed=True)
+        _add_vec3_sequence(path, pts, closed=_entity_is_closed(entity))
 
     elif t == "INSERT":
         for sub in entity.virtual_entities():
@@ -165,6 +165,24 @@ def _add_vec3_sequence(path: QPainterPath, pts, closed: bool = False) -> None:
         path.closeSubpath()
 
 
+def _entity_is_closed(entity) -> bool:
+    if entity.dxftype() == "ELLIPSE":
+        try:
+            start = float(entity.dxf.get("start_param", 0.0))
+            end = float(entity.dxf.get("end_param", 2 * math.pi))
+            return abs(end - start) >= (2 * math.pi - 1e-6)
+        except Exception:
+            return False
+
+    closed = getattr(entity, "closed", None)
+    if closed is not None:
+        return bool(closed)
+    try:
+        return bool(entity.dxf.get("closed", 0))
+    except Exception:
+        return False
+
+
 def _add_lwpolyline(entity, path: QPainterPath) -> None:
     pts = list(entity.get_points(format="xyseb"))
     if not pts:
@@ -180,17 +198,7 @@ def _add_lwpolyline(entity, path: QPainterPath) -> None:
         nx, ny = nxt[0], nxt[1]
         bulge = pts[i][4]
 
-        if abs(bulge) < 1e-9:
-            xy.append((nx, ny))
-        else:
-            center, sa, ea, r = bulge_to_arc(Vec2(cx, cy), Vec2(nx, ny), bulge)
-            if ea <= sa:
-                ea += 2 * math.pi
-            span = ea - sa
-            segs = max(8, int(math.degrees(span) / 5))
-            for j in range(1, segs + 1):
-                a = sa + span * j / segs
-                xy.append((center.x + r * math.cos(a), center.y + r * math.sin(a)))
+        _append_bulge_segment(xy, cx, cy, nx, ny, bulge)
 
     path.moveTo(xy[0][0], -xy[0][1])
     for x, y in xy[1:]:
@@ -203,10 +211,53 @@ def _add_polyline(entity, path: QPainterPath) -> None:
     verts = list(entity.vertices)
     if not verts:
         return
+
+    n = len(verts)
     loc0 = verts[0].dxf.location
-    path.moveTo(loc0.x, -loc0.y)
-    for v in verts[1:]:
-        loc = v.dxf.location
-        path.lineTo(loc.x, -loc.y)
+    xy: list[tuple[float, float]] = [(loc0.x, loc0.y)]
+    count = n if entity.is_closed else n - 1
+    for i in range(count):
+        loc = verts[i].dxf.location
+        nxt = verts[(i + 1) % n].dxf.location
+        try:
+            bulge = float(verts[i].dxf.get("bulge", 0.0))
+        except Exception:
+            bulge = 0.0
+        _append_bulge_segment(xy, loc.x, loc.y, nxt.x, nxt.y, bulge)
+
+    path.moveTo(xy[0][0], -xy[0][1])
+    for x, y in xy[1:]:
+        path.lineTo(x, -y)
     if entity.is_closed:
         path.closeSubpath()
+
+
+def _append_bulge_segment(
+    xy: list[tuple[float, float]],
+    cx: float,
+    cy: float,
+    nx: float,
+    ny: float,
+    bulge: float,
+) -> None:
+    if abs(bulge) < 1e-9:
+        xy.append((nx, ny))
+        return
+
+    center, sa, ea, r = bulge_to_arc(Vec2(cx, cy), Vec2(nx, ny), bulge)
+    if bulge < 0:
+        sa, ea = ea, sa
+        if sa <= ea:
+            sa += 2 * math.pi
+        span = sa - ea
+    else:
+        if ea <= sa:
+            ea += 2 * math.pi
+        span = ea - sa
+    segs = max(8, int(math.degrees(span) / 5))
+    for j in range(1, segs + 1):
+        if bulge < 0:
+            a = sa - span * j / segs
+        else:
+            a = sa + span * j / segs
+        xy.append((center.x + r * math.cos(a), center.y + r * math.sin(a)))

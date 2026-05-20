@@ -675,5 +675,5 @@ class FilePanelWidget(QWidget):
         self._cancel_thumbnails()
         for thread, _worker in list(self._retired_thumbnails):
             if thread.isRunning():
-                thread.wait(1000)
+                thread.wait()
         super().closeEvent(event)

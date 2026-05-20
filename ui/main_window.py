@@ -4,9 +4,9 @@ from pathlib import Path
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QHBoxLayout, QSplitter,
     QStatusBar, QLabel, QVBoxLayout,
-    QFileDialog, QApplication, QMenu, QMessageBox,
+    QFileDialog, QMenu, QMessageBox,
     QPushButton, QButtonGroup, QFrame, QLineEdit,
-    QSizePolicy,
+    QSizePolicy, QDialog, QScrollArea, QTextBrowser,
 )
 from PyQt6.QtCore import Qt, QSize, QSettings, QPointF
 from PyQt6.QtGui import (
@@ -15,9 +15,15 @@ from PyQt6.QtGui import (
 )
 
 from ui.file_browser import COMPUTER_LOCATION, FileBrowserPanel
+from ui.folder_icons import clear_folder_icon_cache
 from ui.viewer_stack import ViewerStack
 from ui.file_panel import ViewStyle
-from services.file_type_detector import detect_viewer_mode
+from services.file_type_detector import (
+    CAD_2D_EXTENSIONS,
+    IMAGE_EXTENSIONS,
+    MODEL_3D_EXTENSIONS,
+    detect_viewer_mode,
+)
 from services.loader_thread import LoaderThread
 from models.viewer_mode import ViewerMode
 
@@ -29,20 +35,20 @@ _MODE_LABEL: dict[ViewerMode, str] = {
     ViewerMode.NONE:    "",
 }
 
+def _extension_filter(exts: frozenset[str]) -> str:
+    return " ".join(f"*{ext}" for ext in sorted(exts))
+
+
+_IMAGE_FILTER = _extension_filter(IMAGE_EXTENSIONS)
+_CAD_2D_FILTER = _extension_filter(CAD_2D_EXTENSIONS)
+_MODEL_3D_FILTER = _extension_filter(MODEL_3D_EXTENSIONS)
+_SUPPORTED_FILTER = " ".join((_IMAGE_FILTER, _CAD_2D_FILTER, _MODEL_3D_FILTER))
+
 _OPEN_FILTER = (
-    "지원 파일 (*.png *.jpg *.jpeg *.bmp *.gif *.ico *.tif *.tiff *.webp "
-    "*.ppm *.pgm *.pbm *.pnm *.tga *.dds *.dib "
-    "*.jfif *.jpe *.jp2 *.j2k *.jpc *.jpf *.jpx "
-    "*.apng *.cur *.icns *.pcx *.qoi *.xbm *.xpm "
-    "*.icb *.vda *.vst *.sgi *.rgb *.rgba *.bw *.ras *.mpo "
-    "*.dxf *.dwg *.stl *.step *.stp);;"
-    "이미지 (*.png *.jpg *.jpeg *.bmp *.gif *.ico *.tif *.tiff *.webp "
-    "*.ppm *.pgm *.pbm *.pnm *.tga *.dds *.dib "
-    "*.jfif *.jpe *.jp2 *.j2k *.jpc *.jpf *.jpx "
-    "*.apng *.cur *.icns *.pcx *.qoi *.xbm *.xpm "
-    "*.icb *.vda *.vst *.sgi *.rgb *.rgba *.bw *.ras *.mpo);;"
-    "2D CAD (*.dxf *.dwg);;"
-    "3D 모델 (*.stl *.step *.stp);;"
+    f"지원 파일 ({_SUPPORTED_FILTER});;"
+    f"이미지 ({_IMAGE_FILTER});;"
+    f"2D CAD ({_CAD_2D_FILTER});;"
+    f"3D 모델 ({_MODEL_3D_FILTER});;"
     "모든 파일 (*.*)"
 )
 
@@ -62,6 +68,7 @@ _STYLE_TO_IDX: dict[ViewStyle, int] = {
 _IDX_TO_STYLE: dict[int, ViewStyle] = {v: k for k, v in _STYLE_TO_IDX.items()}
 
 _WINDOW_ICON = Path(__file__).parent.parent / "image" / "icon" / "Casa-ImageViewer-ICON.png"
+_ABOUT_IMAGE = Path(__file__).parent.parent / "image" / "About_This_APP.png"
 
 
 class MainWindow(QMainWindow):
@@ -304,7 +311,7 @@ class MainWindow(QMainWindow):
 
         quit_act = QAction("종료(&X)", self)
         quit_act.setShortcut("Ctrl+Q")
-        quit_act.triggered.connect(QApplication.quit)
+        quit_act.triggered.connect(self.close)
         file_menu.addAction(quit_act)
 
         view_menu = mb.addMenu("보기(&V)")
@@ -323,7 +330,9 @@ class MainWindow(QMainWindow):
         tools_menu.setEnabled(False)
 
         help_menu = mb.addMenu("도움말(&H)")
-        help_menu.setEnabled(False)
+        about_act = QAction("이 앱에 관하여", self)
+        about_act.triggered.connect(self._show_about_dialog)
+        help_menu.addAction(about_act)
 
     def _setup_statusbar(self) -> None:
         bar = QStatusBar()
@@ -404,6 +413,7 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         self._cancel_loading(wait=True)
         self._save_settings()
+        clear_folder_icon_cache()
         super().closeEvent(event)
 
     # ------------------------------------------------------------------
@@ -473,12 +483,12 @@ class MainWindow(QMainWindow):
         self._load_gen += 1
         if self._loader_thread is not None:
             if wait and self._loader_thread.isRunning():
-                self._loader_thread.wait(1500)
+                self._loader_thread.wait()
             self._loader_thread = None
         if wait:
             for thread in list(self._loader_threads):
                 if thread.isRunning():
-                    thread.wait(1500)
+                    thread.wait()
         self._set_loading(False)
 
     def _forget_loader_thread(self, thread: LoaderThread) -> None:
@@ -540,12 +550,21 @@ class MainWindow(QMainWindow):
 
     def _on_file_opened(self, file_path: str) -> None:
         self._cancel_loading()
-        self._current_file = file_path
-        self._add_recent(file_path)
+        path = Path(file_path)
+        if not path.is_file():
+            QMessageBox.warning(self, "파일 없음", f"파일을 찾을 수 없습니다:\n{file_path}")
+            self._recent_files = [p for p in self._recent_files if p != file_path]
+            self._update_recent_menu()
+            return
 
         mode = detect_viewer_mode(file_path)
+        if mode == ViewerMode.NONE:
+            QMessageBox.warning(self, "지원하지 않는 파일", f"지원하지 않는 파일 형식입니다:\n{path.name}")
+            return
+
+        self._current_file = file_path
+        self._add_recent(file_path)
         self._pending_mode = mode
-        path = Path(file_path)
 
         loader_fn = self._get_loader(mode, path.suffix.lower())
         if loader_fn is None:
@@ -587,6 +606,130 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "파일 열기", "", _OPEN_FILTER)
         if path:
             self._on_file_opened(path)
+
+    def _show_about_dialog(self) -> None:
+        if not _ABOUT_IMAGE.exists():
+            QMessageBox.warning(
+                self,
+                "이 앱에 관하여",
+                f"이미지를 찾을 수 없습니다:\n{_ABOUT_IMAGE}",
+            )
+            return
+
+        pixmap = QPixmap(str(_ABOUT_IMAGE))
+        if pixmap.isNull():
+            QMessageBox.warning(self, "이 앱에 관하여", "About 이미지를 읽을 수 없습니다.")
+            return
+
+        max_width = 900
+        display_pixmap = pixmap
+        if pixmap.width() > max_width:
+            display_pixmap = pixmap.scaled(
+                max_width,
+                int(pixmap.height() * max_width / pixmap.width()),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("이 앱에 관하여")
+        if _WINDOW_ICON.exists():
+            dialog.setWindowIcon(QIcon(str(_WINDOW_ICON)))
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(6)
+
+        top_bar = QHBoxLayout()
+        top_bar.setContentsMargins(0, 0, 0, 0)
+        top_bar.addStretch(1)
+
+        close_button = QPushButton("X")
+        close_button.setFixedSize(30, 30)
+        close_button.setToolTip("닫기")
+        close_button.clicked.connect(dialog.reject)
+        top_bar.addWidget(close_button)
+        layout.addLayout(top_bar)
+
+        image_container = QWidget()
+        image_container.setFixedSize(display_pixmap.size())
+
+        label = QLabel(image_container)
+        label.setPixmap(display_pixmap)
+        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        label.setGeometry(0, 0, display_pixmap.width(), display_pixmap.height())
+
+        license_button = QPushButton(image_container)
+        license_button.setToolTip("사용된 오픈소스 라이선스 정보 보기")
+        license_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        license_button.clicked.connect(self._show_open_source_dialog)
+        license_button.setStyleSheet("""
+            QPushButton {
+                background: rgba(255, 255, 255, 1);
+                border: none;
+                border-radius: 22px;
+            }
+            QPushButton:hover {
+                background: rgba(216, 161, 91, 35);
+                border: 2px solid #D8A15B;
+            }
+            QPushButton:pressed {
+                background: rgba(216, 161, 91, 60);
+            }
+        """)
+        scale_x = display_pixmap.width() / pixmap.width()
+        scale_y = display_pixmap.height() / pixmap.height()
+        license_button.setGeometry(
+            int(46 * scale_x),
+            int(1304 * scale_y),
+            int(868 * scale_x),
+            int(172 * scale_y),
+        )
+        license_button.raise_()
+
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(image_container)
+        scroll_area.setWidgetResizable(False)
+        scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_area.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(scroll_area)
+
+        dialog.resize(
+            min(display_pixmap.width() + 40, 940),
+            min(display_pixmap.height() + 70, 780),
+        )
+        dialog.exec()
+
+    def _show_open_source_dialog(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("오픈소스 라이선스")
+        if _WINDOW_ICON.exists():
+            dialog.setWindowIcon(QIcon(str(_WINDOW_ICON)))
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(14, 14, 14, 14)
+        layout.setSpacing(8)
+
+        top_bar = QHBoxLayout()
+        title = QLabel("오픈소스 라이선스")
+        title.setObjectName("dialogTitle")
+        top_bar.addWidget(title)
+        top_bar.addStretch(1)
+
+        close_button = QPushButton("X")
+        close_button.setFixedSize(30, 30)
+        close_button.setToolTip("닫기")
+        close_button.clicked.connect(dialog.reject)
+        top_bar.addWidget(close_button)
+        layout.addLayout(top_bar)
+
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(True)
+        browser.setHtml(_open_source_license_html())
+        layout.addWidget(browser)
+
+        dialog.resize(720, 560)
+        dialog.exec()
 
     def _on_view_style(self, style: ViewStyle) -> None:
         self._viewer_stack.file_panel.set_view_style(style)
@@ -741,6 +884,67 @@ def _make_rotate_icon(clockwise: bool) -> QIcon:
     painter.drawPolygon(arrow)
     painter.end()
     return QIcon(pixmap)
+
+
+def _open_source_license_html() -> str:
+    return """
+    <html>
+    <head>
+    <style>
+        body {
+            font-family: "Segoe UI", "Malgun Gothic", sans-serif;
+            color: #4A382B;
+            background: #FFFDF9;
+            line-height: 1.45;
+        }
+        h2 {
+            margin: 0 0 10px 0;
+            color: #3A281E;
+        }
+        p {
+            margin: 4px 0 14px 0;
+            color: #7A6050;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+        }
+        th, td {
+            border-bottom: 1px solid #E5D7C8;
+            padding: 8px 6px;
+            text-align: left;
+            vertical-align: top;
+        }
+        th {
+            background: #EEE8DF;
+            color: #3A281E;
+        }
+        a {
+            color: #8A5A24;
+            text-decoration: none;
+        }
+    </style>
+    </head>
+    <body>
+    <h2>사용된 오픈소스 라이브러리</h2>
+    <p>아래 정보는 프로젝트에서 직접 사용하는 주요 패키지 기준입니다. 각 패키지의 세부 의존성은 배포판에 포함된 메타데이터와 원 프로젝트 라이선스를 따릅니다.</p>
+    <table>
+        <tr><th>라이브러리</th><th>용도</th><th>라이선스</th></tr>
+        <tr><td>PyQt6</td><td>GUI 프레임워크</td><td>GPL v3 또는 상용 라이선스</td></tr>
+        <tr><td>Pillow</td><td>이미지 로딩/처리</td><td>HPND</td></tr>
+        <tr><td>pillow-heif</td><td>HEIC/HEIF/AVIF 이미지 로딩</td><td>BSD-3-Clause</td></tr>
+        <tr><td>rawpy</td><td>RAW 이미지 현상</td><td>MIT</td></tr>
+        <tr><td>pypdfium2</td><td>PDF 페이지 렌더링</td><td>BSD-3-Clause, Apache-2.0 및 PDFium 관련 라이선스</td></tr>
+        <tr><td>ezdxf</td><td>DXF 파싱 및 DWG 변환 연동</td><td>MIT</td></tr>
+        <tr><td>trimesh</td><td>STL/메시 데이터 처리</td><td>MIT</td></tr>
+        <tr><td>PyOpenGL</td><td>3D OpenGL 렌더링</td><td>BSD</td></tr>
+        <tr><td>cadquery / cadquery-ocp / OCP</td><td>STEP 파일 로딩 및 테셀레이션</td><td>Apache-2.0 및 OCP 관련 라이선스</td></tr>
+        <tr><td>numpy</td><td>수치 계산 및 메시 배열 처리</td><td>BSD-3-Clause</td></tr>
+        <tr><td>ODA File Converter</td><td>DWG → DXF 변환</td><td>Open Design Alliance 배포 조건 적용, 별도 설치 필요</td></tr>
+    </table>
+    </body>
+    </html>
+    """
 
 
 def _format_size(n: int) -> str:

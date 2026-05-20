@@ -16,6 +16,16 @@
 
 ---
 
+## 이미지 조작
+
+- 왼쪽 드래그: 자르기 영역 생성
+- 자르기 영역 모서리/변 드래그: 영역 조절
+- 자르기 영역 내부 클릭: 자르기 확정
+- 확대 상태에서 오른쪽 드래그: 화면 이동
+- `Esc`: 현재 자르기 선택 영역 취소
+
+---
+
 ## 지원 포맷
 
 ### 이미지 (편집 가능)
@@ -114,7 +124,7 @@ PyImageViewer/
 │   ├── file_panel.py            # 파일 목록 4종 뷰 + 썸네일 + 크기 슬라이더
 │   ├── folder_icons.py          # 커스텀 폴더 아이콘 공용 모듈
 │   ├── viewer_stack.py          # QStackedWidget 뷰어 전환
-│   ├── image_viewer.py          # 이미지 뷰어/편집, 드래그 기반 자르기
+│   ├── image_viewer.py          # 이미지 뷰어/편집, 드래그 기반 자르기/오른쪽 드래그 이동
 │   ├── cad_viewer.py            # 2D CAD 뷰어
 │   ├── model3d_viewer.py        # 3D 모델 뷰어 (OpenGL)
 │   └── resize_dialog.py         # 크기 조정 다이얼로그
