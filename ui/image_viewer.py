@@ -47,6 +47,7 @@ class ImageViewerWidget(QGraphicsView):
         self._pan_start_pos = QPoint()
         self._pan_start_h = 0
         self._pan_start_v = 0
+        self._auto_resize = False
 
         self.setRenderHints(
             QPainter.RenderHint.Antialiasing |
@@ -97,6 +98,11 @@ class ImageViewerWidget(QGraphicsView):
             self._zoom = 1.0
             self.fitInView(self._pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
             self._update_crop_overlay_from_scene()
+
+    def set_auto_resize(self, enabled: bool) -> None:
+        self._auto_resize = enabled
+        if enabled:
+            self.fit()
 
     def rotate_cw(self) -> None:
         if self._pil_image:
@@ -518,4 +524,7 @@ class ImageViewerWidget(QGraphicsView):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self._update_crop_overlay_from_scene()
+        if self._auto_resize:
+            self.fit()
+        else:
+            self._update_crop_overlay_from_scene()

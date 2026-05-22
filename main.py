@@ -123,6 +123,29 @@ QPushButton#btnOpen:pressed, QPushButton#btnBack:pressed {
     background-color: #E8D0B4;
 }
 
+/* ── Auto-Resize toggle ────────────────────────────────────────── */
+QPushButton#btnAutoResize {
+    border-radius: 17px;
+    padding: 5px 16px;
+    background-color: #EDE5D6;
+    border: 1.5px solid #E5D7C8;
+    color: #7A6050;
+    font-weight: 600;
+}
+QPushButton#btnAutoResize:hover {
+    background-color: #F3E5D0;
+    border-color: #D8A15B;
+}
+QPushButton#btnAutoResize:checked {
+    background-color: #D8A15B;
+    border-color: #B87830;
+    color: #3A281E;
+}
+QPushButton#btnAutoResize:checked:hover {
+    background-color: #E0A840;
+    border-color: #A06820;
+}
+
 /* ── Segmented group ───────────────────────────────────────────── */
 QFrame#segGroup {
     background-color: #EDE5D6;

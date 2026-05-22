@@ -320,6 +320,16 @@ class MainWindow(QMainWindow):
         btn_save.setFixedHeight(34)
         btn_save.clicked.connect(lambda: self._viewer_stack.image_viewer.save_as())
         rg.addWidget(btn_save)
+
+        self._btn_auto_resize = QPushButton("Auto-Resize")
+        self._btn_auto_resize.setObjectName("btnAutoResize")
+        self._btn_auto_resize.setCheckable(True)
+        self._btn_auto_resize.setFixedHeight(34)
+        self._btn_auto_resize.setToolTip("창 크기가 바뀔 때 이미지를 자동으로 맞춤")
+        self._btn_auto_resize.toggled.connect(
+            lambda checked: self._viewer_stack.image_viewer.set_auto_resize(checked)
+        )
+        rg.addWidget(self._btn_auto_resize)
         vl.addWidget(self._rot_grp)
 
         vl.addStretch(1)
@@ -809,6 +819,10 @@ class MainWindow(QMainWindow):
         self._rot_grp.setVisible(mode == ViewerMode.IMAGE)
         if mode == ViewerMode.IMAGE:
             self._ensure_image_viewer_signals()
+        else:
+            self._btn_auto_resize.blockSignals(True)
+            self._btn_auto_resize.setChecked(False)
+            self._btn_auto_resize.blockSignals(False)
 
 
 # ------------------------------------------------------------------
