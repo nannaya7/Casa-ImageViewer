@@ -23,6 +23,7 @@ class ImageViewerWidget(QGraphicsView):
 
     crop_mode_exited = pyqtSignal()   # kept for compatibility with older callers
     undo_available = pyqtSignal(bool) # True when history stack is non-empty
+    navigate_requested = pyqtSignal(int)  # +1 next, -1 prev
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -509,8 +510,13 @@ class ImageViewerWidget(QGraphicsView):
             super().mouseReleaseEvent(event)
 
     def keyPressEvent(self, event) -> None:
-        if event.key() == Qt.Key.Key_Escape and self.is_crop_mode:
+        key = event.key()
+        if key == Qt.Key.Key_Escape and self.is_crop_mode:
             self._cancel_crop_selection()
+        elif key in (Qt.Key.Key_Right, Qt.Key.Key_Space):
+            self.navigate_requested.emit(1)
+        elif key == Qt.Key.Key_Left:
+            self.navigate_requested.emit(-1)
         else:
             super().keyPressEvent(event)
 

@@ -306,6 +306,10 @@ class FilePanelWidget(QWidget):
     def file_count(self) -> int:
         return len(self._last_entries)
 
+    def sibling_files(self) -> list[str]:
+        """Return supported files in the current folder in view order (dirs excluded)."""
+        return [str(p) for p in self._last_entries if p.is_file()]
+
     # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------

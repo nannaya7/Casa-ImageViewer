@@ -509,6 +509,7 @@ class MainWindow(QMainWindow):
             return
         iv = self._viewer_stack.image_viewer
         iv.undo_available.connect(self._btn_undo.setEnabled)
+        iv.navigate_requested.connect(self._on_navigate_image)
         self._image_viewer_signals_connected = True
 
     def _set_loading(self, loading: bool) -> None:
@@ -761,6 +762,20 @@ class MainWindow(QMainWindow):
 
     def _on_search(self, text: str) -> None:
         self._viewer_stack.file_panel.set_filter(text)
+
+    def _on_navigate_image(self, delta: int) -> None:
+        if self._current_file is None:
+            return
+        files = self._viewer_stack.file_panel.sibling_files()
+        if not files:
+            return
+        try:
+            idx = files.index(self._current_file)
+        except ValueError:
+            return
+        new_idx = idx + delta
+        if 0 <= new_idx < len(files):
+            self._on_file_opened(files[new_idx])
 
     def _go_back(self) -> None:
         self._cancel_loading()
